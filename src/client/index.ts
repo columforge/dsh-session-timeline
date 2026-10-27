@@ -580,19 +580,46 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const occupiedRef = useRef<Map<string, number>>(new Map())
   useEffect(() => { occupiedRef.current = new Map() }, [snap])
 
+  /* handoff 连线引出/接入边优先级（用户规则）：
+   * 引出（父）：down 框 = 下方（外侧底边），up 框 = 上方（外侧顶边）；
+   *   从新到老次选左侧缘，从老到新次选右侧缘。
+   * 接入（子）：从新到老主选右侧缘（次选下方/上方外侧边）；
+   *   从老到新主选左侧缘（次选下方/上方外侧边）。
+   * A* 依次尝试组合，可达（非兜底直连）即用。 */
   const routeEdge = (from: string, to: string, step: number): string => {
     const fEl = byId.get(from)
     const tEl = byId.get(to)
     if (fEl === undefined || tEl === undefined) return ''
-    // 起终点取框缘外 3px（障碍外扩 2px，故必在障碍外；xs/ys 含精确值 → 网格索引精确命中，
-    // 不经 near 吸附——吸附可能落进障碍内部导致起点孤立而全体兜底直连）
-    const sx = colX(layout, from) + NODE_W / 2 + 3
-    const tx = colX(layout, to) - NODE_W / 2 - 3
-    const sy = nodeTop(layout, from) + NODE_H / 2
-    const ty = nodeTop(layout, to) + NODE_H / 2
-    // step 微扰起止高度，避免多边在同点起止
+    const fUp = (layout.sideOf.get(from) ?? 'up') === 'up'
+    const tUp = (layout.sideOf.get(to) ?? 'up') === 'up'
+    const fTop = nodeTop(layout, from)
+    const tTop = nodeTop(layout, to)
+    const fx = colX(layout, from)
+    const tx = colX(layout, to)
     const j = (step % 3) - 1
-    return routeOrthogonal(obstacles, sx, sy + j * 3, tx, ty + j * 3, occupiedRef.current)
+    /* 引出候选：主 = 外侧边中点（外移 3px 出障碍）；次 = 方向侧缘中点 */
+    const exitCandidates = [
+      { x: fx, y: (fUp ? fTop - 3 : fTop + NODE_H + 3) + j * 3 },
+      { x: newestFirst ? fx - NODE_W / 2 - 3 : fx + NODE_W / 2 + 3, y: fTop + NODE_H / 2 + j * 3 },
+    ]
+    /* 接入候选：主 = 方向侧缘中点；次 = 外侧边中点 */
+    const entryCandidates = [
+      { x: newestFirst ? tx + NODE_W / 2 + 3 : tx - NODE_W / 2 - 3, y: tTop + NODE_H / 2 + j * 3 },
+      { x: tx, y: (tUp ? tTop - 3 : tTop + NODE_H + 3) + j * 3 },
+    ]
+    const occ = occupiedRef.current
+    let fallback: string | null = null
+    for (const ec of exitCandidates) {
+      for (const en of entryCandidates) {
+        const d = routeOrthogonal(obstacles, ec.x, ec.y, en.x, en.y, occ)
+        if (d === '') continue
+        /* 2 点直连 = A* 判定不可达的兜底；换下一组合 */
+        const segs = (d.match(/L/g) || []).length
+        if (segs >= 1) return d
+        if (fallback === null) fallback = d
+      }
+    }
+    return fallback ?? ''
   }
 
   const bucketTail = (bucket: string): string => {
