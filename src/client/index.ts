@@ -200,35 +200,49 @@ function computeLayout(nodesIn: SNode[], edges: NEdge[], manualLinks: MLink[]): 
   // 手工衔接（from 创建较早 → to 较晚）：to 未被子会话化时同样下沉深度行
   const manualParent = new Map<string, string>()
   for (const l of manualLinks) manualParent.set(l.to, l.from)
+  /* 分派（side/depth）按拓扑序：依赖（原生父 / 手工 from）已分派才处理该节点，
+   * 依赖未定则延后到下一轮——手工链的父创建可晚于子（拖拽语义），创建序不可靠；
+   * 同时与显示排序键（lastAt 等）解耦。 */
+  const byCreation = [...nodesIn].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
   let flip = 0
   let upMax = 0
   let downMax = 0
-  /* 分派（side/depth）恒按创建序：父必先于子被处理（host 归一保证 from/父创建更早），
-   * 与显示排序键（lastAt 等）解耦——否则子先处理时查不到父，被误当独立节点。 */
-  const byCreation = [...nodesIn].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
-  byCreation.forEach((n) => {
-    const np = nativeParent.get(n.id)
-    const mp = manualParent.get(n.id)
-    let side: 'up' | 'down'
-    let depth: number
-    if (np !== undefined && sideOf.has(np)) {
-      // 原生血缘（handoff 链 / 分支）：继承父侧，深度 + 1（血缘深度行，向轴外侧叠）
-      side = sideOf.get(np) ?? 'up'
-      depth = (depthOf.get(np) ?? 0) + 1
-    } else if (mp !== undefined && sideOf.has(mp)) {
-      // 手工链：to 端继承 from 侧、深度 + 1（与血缘深度行同款）
-      side = sideOf.get(mp) ?? 'up'
-      depth = (depthOf.get(mp) ?? 0) + 1
-    } else {
-      side = flip % 2 === 0 ? 'up' : 'down'
-      depth = 0
-      flip += 1
+  const pending = byCreation
+  let progressed = true
+  while (pending.length > 0 && progressed) {
+    progressed = false
+    for (let pi = pending.length - 1; pi >= 0; pi--) {
+      const n = pending[pi]
+      const np = nativeParent.get(n.id)
+      const mp = manualParent.get(n.id)
+      const dep = np ?? mp
+      if (dep !== undefined && !sideOf.has(dep)) continue
+      let side: 'up' | 'down'
+      let depth: number
+      if (dep !== undefined) {
+        // 血缘（handoff 链/分支）或手工链：继承父侧，深度 + 1（血缘深度行）
+        side = sideOf.get(dep) ?? 'up'
+        depth = (depthOf.get(dep) ?? 0) + 1
+      } else {
+        side = flip % 2 === 0 ? 'up' : 'down'
+        depth = 0
+        flip += 1
+      }
+      sideOf.set(n.id, side)
+      depthOf.set(n.id, depth)
+      if (side === 'up' && depth > upMax) upMax = depth
+      if (side === 'down' && depth > downMax) downMax = depth
+      pending.splice(pi, 1)
+      progressed = true
     }
+  }
+  // 兜底：仅理论成环才会残留，按独立分派
+  for (const n of pending) {
+    const side: 'up' | 'down' = flip % 2 === 0 ? 'up' : 'down'
     sideOf.set(n.id, side)
-    depthOf.set(n.id, depth)
-    if (side === 'up' && depth > upMax) upMax = depth
-    if (side === 'down' && depth > downMax) downMax = depth
-  })
+    depthOf.set(n.id, 0)
+    flip += 1
+  }
   nodesIn.forEach((n, i) => { colOf.set(n.id, i) })
   const upBlock = (upMax + 1) * NODE_H + upMax * ROW_GAP
   const downBlock = (downMax + 1) * NODE_H + downMax * ROW_GAP
@@ -618,7 +632,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       if (!cur.moved) { setSelected((s) => (s === cur.from ? null : cur.from)); return }
       const el = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest?.('[data-node-id]') as HTMLElement | null
       const target = el?.getAttribute('data-node-id') ?? null
-      if (target !== null && target !== cur.from) void act('link', cur.from, target)
+      // 拖拽语义：被拖节点(cur.from) 衔接自 落点(target)——target 为前驱/父
+      if (target !== null && target !== cur.from) void act('link', target, cur.from)
     }
     window.addEventListener('pointermove', move, { passive: true })
     window.addEventListener('pointerup', finish)

@@ -553,16 +553,16 @@ export function apply(ctx: Context, config: Config): void {
             return
           }
         }
-        // 方向按创建时间归一：from = 创建较早一方
-        const [nf, nt] = a.createdAt <= b.createdAt ? [from, to] : [to, from]
+        // 方向 = 拖拽语义：from = 落点节点（前驱/父），to = 被拖节点（后继/子），
+        // 与原生血缘（parent → child）同向；不做创建时间归一
         const doc = loadDoc(root, located.bucket)
         if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }
-        const dup = doc.doc.links.some((l) => (l.from === nf && l.to === nt) || (l.from === nt && l.to === nf))
+        const dup = doc.doc.links.some((l) => (l.from === from && l.to === to) || (l.from === to && l.to === from))
         if (dup) { json(res, 200, { ok: true, duplicate: true }); return }
-        doc.doc.links.push({ from: nf, to: nt, created_at: new Date().toISOString() })
+        doc.doc.links.push({ from, to, created_at: new Date().toISOString() })
         const err = saveDoc(root, located.bucket, doc.doc)
         if (err !== null) { json(res, 500, { ok: false, error: err }); return }
-        json(res, 200, { ok: true, from: nf, to: nt })
+        json(res, 200, { ok: true, from, to })
         return
       }
 
