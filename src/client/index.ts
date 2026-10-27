@@ -632,8 +632,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       if (!cur.moved) { setSelected((s) => (s === cur.from ? null : cur.from)); return }
       const el = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest?.('[data-node-id]') as HTMLElement | null
       const target = el?.getAttribute('data-node-id') ?? null
-      // 拖拽语义：被拖节点(cur.from) 衔接自 落点(target)——target 为前驱/父
-      if (target !== null && target !== cur.from) void act('link', target, cur.from)
+      if (target !== null && target !== cur.from) void act('link', cur.from, target)
     }
     window.addEventListener('pointermove', move, { passive: true })
     window.addEventListener('pointerup', finish)
