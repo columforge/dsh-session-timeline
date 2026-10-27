@@ -597,14 +597,20 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const fx = colX(layout, from)
     const tx = colX(layout, to)
     const j = (step % 3) - 1
-    /* 引出候选：主 = 外侧边中点（外移 3px 出障碍）；次 = 方向侧缘中点 */
+    /* 引出/接入候选（用户矩阵，覆盖父在子左/右全部组合）：
+     * 侧缘恒取父子相对的面向侧——父在子左 => 父出右缘、子入左缘；
+     * 父在子右 => 父出左缘、子入右缘。
+     * 引出主选 = 外侧边（down 底 / up 顶），次选面向侧缘；
+     * 接入主选 = 面向侧缘，次选外侧边。 */
+    const childOnRight = tx > fx
+    const exitSideX = childOnRight ? fx + NODE_W / 2 + 3 : fx - NODE_W / 2 - 3
+    const entrySideX = childOnRight ? tx - NODE_W / 2 - 3 : tx + NODE_W / 2 + 3
     const exitCandidates = [
       { x: fx, y: (fUp ? fTop - 3 : fTop + NODE_H + 3) + j * 3 },
-      { x: newestFirst ? fx - NODE_W / 2 - 3 : fx + NODE_W / 2 + 3, y: fTop + NODE_H / 2 + j * 3 },
+      { x: exitSideX, y: fTop + NODE_H / 2 + j * 3 },
     ]
-    /* 接入候选：主 = 方向侧缘中点；次 = 外侧边中点 */
     const entryCandidates = [
-      { x: newestFirst ? tx + NODE_W / 2 + 3 : tx - NODE_W / 2 - 3, y: tTop + NODE_H / 2 + j * 3 },
+      { x: entrySideX, y: tTop + NODE_H / 2 + j * 3 },
       { x: tx, y: (tUp ? tTop - 3 : tTop + NODE_H + 3) + j * 3 },
     ]
     const occ = occupiedRef.current
