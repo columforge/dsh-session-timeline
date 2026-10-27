@@ -328,6 +328,7 @@ function routeOrthogonal(
   sx: number, sy: number,
   tx: number, ty: number,
   occupied: Map<string, number>,
+  corridorYs: number[] = [],
 ): string {
   /* 通道坐标：所有框缘 ±8 + 起/终点，去重并合并近邻 */
   const xsRaw: number[] = [sx, tx]
@@ -399,8 +400,37 @@ function routeOrthogonal(
     }
   }
   if (!parentMap.has(keyOf(t.x, t.y))) {
-    // 兜底：不可达时直连（理论不发生：框间总有通道）
-    return 'M ' + String(sx) + ' ' + String(sy) + ' L ' + String(tx) + ' ' + String(ty)
+    /* 兜底（A* 网格死角时）：① 经外侧走廊的 U 形（走廊在所有框外，保证不穿框）；
+     * ② 正交 L 形折线（绝不出斜线，穿障碍时取段少的） */
+    const bad = (path: string): number => {
+      const nums = path.match(/-?\d+(\.\d+)?/g) ?? []
+      const pts: [number, number][] = []
+      for (let i = 0; i < nums.length; i += 2) pts.push([Number(nums[i]), Number(nums[i + 1])])
+      let n = 0
+      for (let i = 0; i + 1 < pts.length; i++) {
+        for (const o of obstacles) {
+          const l = o.x; const r = o.x + o.w; const tp = o.y; const bt = o.y + o.h
+          if (pts[i][0] === pts[i + 1][0]) {
+            if (pts[i][0] > l && pts[i][0] < r && Math.max(pts[i][1], pts[i + 1][1]) > tp && Math.min(pts[i][1], pts[i + 1][1]) < bt) n += 1
+          } else if (pts[i][1] > tp && pts[i][1] < bt && Math.max(pts[i][0], pts[i + 1][0]) > l && Math.min(pts[i][0], pts[i + 1][0]) < r) n += 1
+        }
+      }
+      return n
+    }
+    const candidates: string[] = []
+    for (const cy of corridorYs) {
+      candidates.push('M ' + String(sx) + ' ' + String(sy) + ' L ' + String(sx) + ' ' + String(cy) + ' L ' + String(tx) + ' ' + String(cy) + ' L ' + String(tx) + ' ' + String(ty))
+    }
+    candidates.push('M ' + String(sx) + ' ' + String(sy) + ' L ' + String(sx) + ' ' + String(ty) + ' L ' + String(tx) + ' ' + String(ty))
+    candidates.push('M ' + String(sx) + ' ' + String(sy) + ' L ' + String(tx) + ' ' + String(sy) + ' L ' + String(tx) + ' ' + String(ty))
+    let best: string | null = null
+    let bestBad = Infinity
+    for (const c of candidates) {
+      const b = bad(c)
+      if (b === 0) return c
+      if (b < bestBad) { bestBad = b; best = c }
+    }
+    return best ?? candidates[0]
   }
   /* 回溯折点 */
   const pts: [number, number][] = []
@@ -605,13 +635,14 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const childOnRight = tx > fx
     const exitSideX = childOnRight ? fx + NODE_W / 2 + 3 : fx - NODE_W / 2 - 3
     const entrySideX = childOnRight ? tx - NODE_W / 2 - 3 : tx + NODE_W / 2 + 3
+    /* 微扰沿边滑动（j*10/j*6），不垂直推回框内——否则起终点落回障碍内而孤立 */
     const exitCandidates = [
-      { x: fx, y: (fUp ? fTop - 3 : fTop + NODE_H + 3) + j * 3 },
-      { x: exitSideX, y: fTop + NODE_H / 2 + j * 3 },
+      { x: fx + j * 10, y: fUp ? fTop - 3 : fTop + NODE_H + 3 },
+      { x: exitSideX, y: fTop + NODE_H / 2 + j * 6 },
     ]
     const entryCandidates = [
-      { x: entrySideX, y: tTop + NODE_H / 2 + j * 3 },
-      { x: tx, y: (tUp ? tTop - 3 : tTop + NODE_H + 3) + j * 3 },
+      { x: entrySideX, y: tTop + NODE_H / 2 + j * 6 },
+      { x: tx + j * 10, y: tUp ? tTop - 3 : tTop + NODE_H + 3 },
     ]
     const occ = occupiedRef.current
     let fallback: string | null = null
