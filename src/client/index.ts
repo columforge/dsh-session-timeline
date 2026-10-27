@@ -33,6 +33,19 @@ const PANEL_TITLE = '会话时间线'
 const TAB_ID = '@dsh-external/session-timeline'
 const TAB_KIND = 'session-timeline'
 
+/** 面板当前所选工作区（null = 跟随当前会话所属桶）。页签标题据此计数，
+ *  与面板内容保持一致；面板卸载时复位。 */
+const viewBucket: { value: string | null; listeners: Set<() => void> } = { value: null, listeners: new Set() }
+function setViewBucket(value: string | null): void {
+  if (viewBucket.value === value) return
+  viewBucket.value = value
+  for (const listener of [...viewBucket.listeners]) listener()
+}
+function subscribeViewBucket(listener: () => void): () => void {
+  viewBucket.listeners.add(listener)
+  return () => { viewBucket.listeners.delete(listener) }
+}
+
 /** UI 侧面板高度上限；几何常量与纯函数见 ../geometry（单测覆盖）。 */
 const TIMELINE_MAX_H = 420
 
@@ -208,6 +221,18 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   useEffect(() => {
     void fetchWorkspaces().then((ws) => { if (ws !== null) setWorkspaces(ws) })
   }, [])
+
+  /* 同步面板所选工作区给页签标题（null = 跟随当前会话所属桶） */
+  useEffect(() => {
+    setViewBucket(workspace ?? null)
+    return () => setViewBucket(null)
+  }, [workspace])
+
+  /* 当前会话所属桶（工作区下拉首项 = 跟随它；首次加载快照时捕获） */
+  const sessionBucketRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (workspace === undefined && snap?.bucket !== undefined) sessionBucketRef.current = snap.bucket
+  }, [workspace, snap])
 
   /* 排序：创建时间（默认）/ 最后活动时间；方向：从老到新（默认）/ 从新到老 */
   const [sortBy, setSortBy] = useState<'createdAt' | 'lastAt'>('createdAt')
@@ -495,7 +520,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     /* 头部：全局开关 + 工作区选择 + 统计 + 刷新 */
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: DIM, flexWrap: 'wrap' } },
       h('select', {
-        value: workspace ?? snap.bucket ?? '',
+        value: workspace ?? '',
+        title: '查看哪个工作区的时间线',
         style: {
           fontSize: 12, maxWidth: 150, padding: '2px 4px', borderRadius: 6,
           border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
@@ -506,9 +532,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           setWorkspace(ev.target.value === '' ? undefined : ev.target.value)
         },
       },
-        h('option', { value: snap.bucket ?? '' }, snap.bucket === undefined ? '当前工作区' : '本会话工作区'),
+        h('option', { value: '' }, '当前会话工作区'),
         ...(workspaces ?? [])
-          .filter((w) => w.bucket !== snap.bucket)
+          .filter((w) => w.bucket !== sessionBucketRef.current)
           .map((w) => h('option', { key: w.bucket, value: w.bucket, title: w.cwd ?? w.bucket }, wsLabel(w))),
       ),
       h('select', {
@@ -819,17 +845,21 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   )
 }
 
-/** 页签标题：文字 + 会话数（轻轮询，当前会话工作区）。 */
+/** 页签标题：文字 + 当前面板视图的顶层会话数（轻轮询）。
+ *  视图 = 面板所选工作区；面板未选时跟随当前会话所属桶——切换工作区即时跟随。 */
 function TabTitle(props: { sessionId?: string }): unknown {
   const { sessionId } = props
   const [count, setCount] = useState(0)
+  const [bucket, setBucket] = useState<string | null>(viewBucket.value)
+  useEffect(() => subscribeViewBucket(() => setBucket(viewBucket.value)), [])
 
   useEffect(() => {
-    if (sessionId === undefined) return
+    const workspace = bucket ?? undefined
+    if (workspace === undefined && sessionId === undefined) return
     const tick = (): void => {
       const ctrl = new AbortController()
       const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-      fetch(listUrl(undefined, sessionId), { signal: ctrl.signal })
+      fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
         .then((r) => r.json())
         .then((data: Snapshot) => setCount(data?.ok === true ? (data.sessions?.length ?? 0) : 0))
         .catch(() => { /* 保上次值 */ })
@@ -838,7 +868,7 @@ function TabTitle(props: { sessionId?: string }): unknown {
     tick()
     const t = setInterval(tick, 12000)
     return () => clearInterval(t)
-  }, [sessionId])
+  }, [bucket, sessionId])
 
   return h('span', null, PANEL_TITLE + (count > 0 ? '（' + String(count) + '）' : ''))
 }

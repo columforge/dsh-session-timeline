@@ -402,7 +402,7 @@ export function apply(ctx: Context, config: Config): void {
     return out
   }
 
-  /** 工作区清单：桶名 + cwd（解析每桶一个会话头，缓存）+ 会话数 + 最新 mtime。 */
+  /** 工作区清单：桶名 + cwd（解析每桶一个会话头，缓存）+ 顶层会话数（= 时间线节点数）+ 最新 mtime。 */
   const listWorkspaces = (): WorkspaceInfo[] => {
     const out: WorkspaceInfo[] = []
     let buckets
@@ -420,7 +420,9 @@ export function apply(ctx: Context, config: Config): void {
       for (const sid of sids) {
         try {
           const st = statSync(join(sessionsRoot, b.name, sid, SESSION_FILE))
-          count += 1
+          /* 会话数口径 = 时间线节点口径（仅顶层 session-* 会话；subagent 子会话
+           * 不入线也不计入数量），与 /list 的 sessions.length 对齐 */
+          if (sid.startsWith('session-')) count += 1
           if (st.mtimeMs > newest) newest = st.mtimeMs
         } catch { /* 无会话文件的目录不计 */ }
       }
