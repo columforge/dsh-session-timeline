@@ -885,17 +885,30 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               opacity: 0.85,
             }, m.date),
           )),
-          /* 鱼刺：节点近轴边中心 → 轴 */
+          /* 鱼刺：全部节点都连到主轴。depth 0 = 列中心竖线（框边 → 轴）；
+           * 深度行 = 框侧缘 → 列缝 → 竖直到轴（绕行，不穿同列其他框） */
           ...nodes.map((n) => {
-            if ((layout.depthOf.get(n.id) ?? 0) !== 0) return null
             const cx = colX(layout, n.id)
             const up = layout.sideOf.get(n.id) !== 'down'
-            const yEdge = nodeTop(layout, n.id) + (up ? NODE_H : 0)
-            return h('line', {
+            const depth = layout.depthOf.get(n.id) ?? 0
+            const top = nodeTop(layout, n.id)
+            if (depth === 0) {
+              const yEdge = top + (up ? NODE_H : 0)
+              return h('line', {
+                key: 'f' + n.id,
+                x1: cx, y1: axisY,
+                x2: cx, y2: yEdge,
+                stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
+              })
+            }
+            const seamX = cx + NODE_W / 2 + 10
+            return h('path', {
               key: 'f' + n.id,
-              x1: cx, y1: up ? axisY : axisY,
-              x2: cx, y2: yEdge,
-              stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
+              d: 'M ' + String(cx + NODE_W / 2) + ' ' + String(top + NODE_H / 2) +
+                ' H ' + String(seamX) +
+                ' V ' + String(axisY),
+              fill: 'none',
+              stroke: AXIS, strokeWidth: 1.2, opacity: 0.35,
             })
           }),
           /* 原生血缘弯折线：蓝 = handoff，紫 = 分支（箭头向右进子左侧） */
