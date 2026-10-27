@@ -498,7 +498,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
 
   /* 排序：创建时间（默认）/ 最后活动时间；方向：从老到新（默认）/ 从新到老 */
   const [sortBy, setSortBy] = useState<'createdAt' | 'lastAt'>('createdAt')
-  const [newestFirst, setNewestFirst] = useState(false)
+  const [newestFirst, setNewestFirst] = useState(true)
   const sortedNodes = useMemo(() => {
     const list = [...(snap?.sessions ?? [])]
     list.sort((a, b) => (sortBy === 'createdAt' ? a.createdAt - b.createdAt : a.lastAt - b.lastAt) || (a.id < b.id ? -1 : 1))
