@@ -900,23 +900,39 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               opacity: 0.85,
             }, m.date),
           )),
-          /* 鱼刺：全部节点都连到主轴，且只走近轴侧竖直方向（不绕左右侧）。
-           * depth 0 = 列中心竖线；深度行与轴之间隔着同列其他框，
-           * 竖线走框缘外 7px 的列内竖缝（避开中间框体，仍在该列范围内） */
-          ...nodes.map((n) => {
-            const cx = colX(layout, n.id)
-            const up = layout.sideOf.get(n.id) !== 'down'
-            const depth = layout.depthOf.get(n.id) ?? 0
-            const top = nodeTop(layout, n.id)
-            const x = depth === 0 ? cx : cx + NODE_W / 2 + 7
-            const yEdge = top + (up ? NODE_H : 0)
-            return h('line', {
-              key: 'f' + n.id,
-              x1: x, y1: axisY,
-              x2: x, y2: yEdge,
-              stroke: AXIS, strokeWidth: 1.2, opacity: 0.4,
-            })
-          }),
+          /* 鱼刺：全部节点都贴框居中竖直连到主轴。
+           * 深度行与轴之间的同列框体不画线（接力分段）：每列每侧按深度排序，
+           * 画 [轴 -> 最浅框近轴边]、[上一框远轴边 -> 下一框近轴边] 等空隙段 */
+          ...(() => {
+            const groups = new Map()
+            for (const n of nodes) {
+              const up = layout.sideOf.get(n.id) !== 'down'
+              const depth = layout.depthOf.get(n.id) ?? 0
+              const top = nodeTop(layout, n.id)
+              const key = String(layout.colOf.get(n.id) ?? 0) + '|' + (up ? 'up' : 'down')
+              const list = groups.get(key) ?? []
+              list.push({ top, near: up ? top + NODE_H : top, far: up ? top : top + NODE_H, depth })
+              groups.set(key, list)
+            }
+            const lines = []
+            let fi = 0
+            for (const [key, list] of groups) {
+              const cx = Number(key.split('|')[0]) * SPACING + SPACING / 2
+              list.sort((a, b) => a.depth - b.depth)
+              let prevY = axisY
+              for (const b of list) {
+                if (Math.abs(prevY - b.near) > 2) {
+                  lines.push(h('line', {
+                    key: 'f' + String(fi++),
+                    x1: cx, y1: prevY, x2: cx, y2: b.near,
+                    stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
+                  }))
+                }
+                prevY = b.far
+              }
+            }
+            return lines
+          })(),
           /* 原生血缘弯折线：蓝 = handoff，紫 = 分支（箭头向右进子左侧） */
           ...edges.map((e, i) => {
             if (!layout.colOf.has(e.from) || !layout.colOf.has(e.to)) return null
