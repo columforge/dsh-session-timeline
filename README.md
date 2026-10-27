@@ -51,7 +51,9 @@
 - 会话元数据：`~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`
   的 header 行（`createdAt` / `parentSession` / `isSeeded` / `cwd`）、最后一条
   事件 time（最后活动）、最后一条 `session/title` 事件、首条真实用户消息
-  内容（handoff 新会话判据）、
+  时间与内容（**会话创建时间 = 首条真实用户消息的 time**；尚无用户消息的
+  会话回落 header `createdAt`，原值另以 `logCreatedAt` 随节点返回；
+  handoff 新会话判据）、
   首末对话窗口内的 handoff skill 调用（zstd 多帧解码，mtime+size 缓存，
   容忍尾部撕裂帧；轮次窗口以真实用户消息 `source.kind=user` 分隔）。
 
@@ -117,7 +119,9 @@ npm run build          # tsc host + tsdown client（借 dsh checkout 工具链�
 - 会话元数据：`~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`
   的 header 行（`createdAt` / `parentSession` / `isSeeded` / `cwd`）、最后一条
   事件 time（最后活动）、最后一条 `session/title` 事件、首条真实用户消息
-  内容（handoff 新会话判据）、
+  时间与内容（**会话创建时间 = 首条真实用户消息的 time**；尚无用户消息的
+  会话回落 header `createdAt`，原值另以 `logCreatedAt` 随节点返回；
+  handoff 新会话判据）、
   首末对话窗口内的 handoff skill 调用（zstd 多帧解码，mtime+size 缓存，
   容忍尾部撕裂帧；轮次窗口以真实用户消息 `source.kind=user` 分隔）。
 

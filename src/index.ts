@@ -1,9 +1,9 @@
 /**
  * @dsh-external/session-timeline — 会话时间线（右栏页签）。
  * Host 侧：扫描 ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd，
- * 提取 header（createdAt / parentSession / isSeeded / cwd）、最后一条
- * session/title 标题、以及首末对话是否调用过 handoff skill
- * （user/message + source.kind=skill-invocation + name=handoff）。
+ * 提取 header（createdAt / parentSession / isSeeded / cwd）、首条真实用户消息
+ * 时间（会话创建时间口径）、最后一条 session/title 标题、以及首末对话是否调用过
+ * handoff skill（user/message + source.kind=skill-invocation + name=handoff）。
  * 顶层会话（id 带 session- 前缀）作为时间线节点；parentSession 指向桶内
  * 顶层会话构成原生边——父会话单子 = handoff 衔接，多子 = 分支。
  * 手工拖拽衔接按工作区隔离存 ~/.dsh/session-timeline/<bucket>.json。
@@ -37,7 +37,10 @@ export const Config = z.object({
 export interface SessionNode {
   id: string
   title: string | null
+  /** 会话创建时间 = 首条真实用户消息的 time；尚无用户消息时回落 header.createdAt */
   createdAt: number
+  /** header.createdAt 原文（会话对象落盘时刻，供展示对账） */
+  logCreatedAt: number
   /** header.parentSession 原文（可能指向桶外/已删除会话） */
   parent: string | null
   /** header.isSeeded：以 handoff 上下文种子开場 */
@@ -152,7 +155,10 @@ function decompressLog(buffer: Buffer): string | null {
 }
 
 interface ParsedLog {
+  /** header.createdAt（会话对象落盘时刻；仅作回落与展示参考） */
   createdAt: number
+  /** 首条真实用户消息的 time（会话创建时间口径；0 = 尚无用户消息） */
+  firstUserAt: number
   /** 日志末事件 time（最后活动） */
   lastAt: number
   parent: string | null
@@ -193,6 +199,7 @@ function parseLog(text: string): ParsedLog | null {
    * handoff 字样即命中，如“读 handoff 文档”“handoff-xxx.md”）。 */
   const userPos: number[] = []
   let firstUserText: string | null = null
+  let firstUserAt = 0
   let u = text.indexOf(USER_MSG_MARK)
   while (u >= 0) {
     const lineStart = text.lastIndexOf('\n', u - 1) + 1
@@ -200,9 +207,10 @@ function parseLog(text: string): ParsedLog | null {
     if (lineEnd < 0) lineEnd = text.length
     try {
       const raw = text.slice(lineStart, lineEnd)
-      const ev = JSON.parse(raw) as { type?: unknown; data?: { source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
+      const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
       if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user') {
         userPos.push(u)
+        if (firstUserAt === 0 && typeof ev.time === 'number' && ev.time > 0) firstUserAt = ev.time
         if (firstUserText === null && Array.isArray(ev.data.content)) {
           const joined = ev.data.content
             .filter((c) => c?.type === 'text' && typeof c.text === 'string')
@@ -248,6 +256,7 @@ function parseLog(text: string): ParsedLog | null {
 
   return {
     createdAt: typeof hd.createdAt === 'number' ? hd.createdAt : 0,
+    firstUserAt,
     lastAt,
     parent: typeof hd.parentSession === 'string' && hd.parentSession !== '' ? hd.parentSession : null,
     seeded: hd.isSeeded === true,
@@ -343,7 +352,8 @@ export function apply(ctx: Context, config: Config): void {
             ? {
                 id: sid,
                 title: parsed.title,
-                createdAt: parsed.createdAt,
+                createdAt: parsed.firstUserAt > 0 ? parsed.firstUserAt : parsed.createdAt,
+                logCreatedAt: parsed.createdAt,
                 lastAt: parsed.lastAt,
                 parent: parsed.parent,
                 seeded: parsed.seeded,
@@ -554,7 +564,8 @@ export function apply(ctx: Context, config: Config): void {
           }
         }
         // 方向按创建时间归一：from = 创建较早一方（时间前驱），
-        // to = 创建较晚一方（后继）——与原生血缘 parent→child 同向（老指向新）
+        // to = 创建较晚一方（后继）——创建时间 = 首条真实用户消息时间，
+        // 尚无用户消息的会话回落 header.createdAt——与原生血缘 parent→child 同向（老指向新）
         const [nf, nt] = a.createdAt <= b.createdAt ? [from, to] : [to, from]
         const doc = loadDoc(root, located.bucket)
         if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }

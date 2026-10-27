@@ -41,7 +41,10 @@ const TIMELINE_MAX_H = 420
 type SNode = {
   id: string
   title: string | null
+  /** 会话创建时间 = 首条真实用户消息时间（无用户消息时回落日志 header） */
   createdAt: number
+  /** 日志 header.createdAt 原文（会话对象落盘时刻） */
+  logCreatedAt: number
   /** 最后活动时间（时间线定位/显示用它） */
   lastAt: number
   parent: string | null
@@ -1064,6 +1067,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           h('div', { style: { color: DIM, fontSize: 11.5, fontFamily: MONO } },
             shortId(sel.id) + ' · 活动至 ' + fmtFull(sel.lastAt) +
             '（创建 ' + fmt(sel.createdAt) + '）' +
+            (sel.logCreatedAt > 0 && sel.logCreatedAt !== sel.createdAt
+              ? ' · 日志创建 ' + fmt(sel.logCreatedAt) : '') +
             ' · ' + bucketTail(sel.bucket) +
             (sel.handoffSeed ? ' · handoff 新会话' : (sel.seeded ? ' · 种子' : ''))),
           sel.parent === null
