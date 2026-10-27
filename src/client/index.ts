@@ -900,30 +900,21 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               opacity: 0.85,
             }, m.date),
           )),
-          /* 鱼刺：全部节点都连到主轴。depth 0 = 列中心竖线（框边 → 轴）；
-           * 深度行 = 框侧缘 → 列缝 → 竖直到轴（绕行，不穿同列其他框） */
+          /* 鱼刺：全部节点都连到主轴，且只走近轴侧竖直方向（不绕左右侧）。
+           * depth 0 = 列中心竖线；深度行与轴之间隔着同列其他框，
+           * 竖线走框缘外 7px 的列内竖缝（避开中间框体，仍在该列范围内） */
           ...nodes.map((n) => {
             const cx = colX(layout, n.id)
             const up = layout.sideOf.get(n.id) !== 'down'
             const depth = layout.depthOf.get(n.id) ?? 0
             const top = nodeTop(layout, n.id)
-            if (depth === 0) {
-              const yEdge = top + (up ? NODE_H : 0)
-              return h('line', {
-                key: 'f' + n.id,
-                x1: cx, y1: axisY,
-                x2: cx, y2: yEdge,
-                stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
-              })
-            }
-            const seamX = cx + NODE_W / 2 + 10
-            return h('path', {
+            const x = depth === 0 ? cx : cx + NODE_W / 2 + 7
+            const yEdge = top + (up ? NODE_H : 0)
+            return h('line', {
               key: 'f' + n.id,
-              d: 'M ' + String(cx + NODE_W / 2) + ' ' + String(top + NODE_H / 2) +
-                ' H ' + String(seamX) +
-                ' V ' + String(axisY),
-              fill: 'none',
-              stroke: AXIS, strokeWidth: 1.2, opacity: 0.35,
+              x1: x, y1: axisY,
+              x2: x, y2: yEdge,
+              stroke: AXIS, strokeWidth: 1.2, opacity: 0.4,
             })
           }),
           /* 原生血缘弯折线：蓝 = handoff，紫 = 分支（箭头向右进子左侧） */
