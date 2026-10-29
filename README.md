@@ -23,10 +23,18 @@
   x30，跨边共享拥挤表错开平行走线），任意布局/连线组合自动适配；
   兜底优先外侧走廊 U 形，其次 L 形——**绝不出斜线、不穿会话框**。
   - 蓝实线 = handoff 衔接（父单子，链式）
-  - 紫实线 = 分支（父多子，扇出；父节点带 `⑂N` 徽章）
+  - 紫实线 = 分支（扇出；父节点带 `⑂N` 徽章）
   - 虚线橙 = 手工衔接（拖拽建立；host 按创建时间自动定向，与原生血缘重复
     会被拒）。to 端与 handoff 同款下沉深度行；点击节点可查看详情并断开。
-    手工衔接计入出入度：有手工出边的会话不再显示「待接后继」金框。
+- **血缘链 = 原生边 ∪ 手工边**：凡链上语义一律按合并链计算（纯函数
+  `src/geometry/lineage.ts`）——出入度（金紫框判据）、`⑂N` 徽章（原生 +
+  手工后继总数）、分支判定（**合并出度 ≥ 2 即分支**：父另有手工后继时，
+  原生单子边也显形为紫色分支线）、详情区「血缘 / 衔接到」叙述（手工边标
+  「（手工）」，全无前驱才报根会话）。host `edges[].kind` 保持原生口径
+  （按原生子数分类，/link 判重用），显形类别由 UI 推导，API 契约不变。
+  深度行跨链传递不变：手工链 A→B→C 与原生接手工（P→B→C）同侧连续下沉。
+  统计行「衔接 X · 分支 Y」= 显形类别口径（与画布颜色一致）；「手工 Z」
+  = 手工边数。
 - **引出/接入边矩阵**（父子面向侧 + 外侧边优先）：引出主选 = 外侧边
   （up 顶 / down 底），次选面向侧缘；接入主选 = 面向侧缘（父在子左 => 子入
   左缘；父在子右 => 子入右缘），次选外侧边。防重合微扰沿边滑动（出口水平
@@ -89,6 +97,8 @@
   消息/lastAt/handoff 调用明细，无插件依赖）。
 - `src/geometry/layout.ts`：**纯函数**布局（`computeLayout` / `colX` / `nodeTop`
   + 版面常量，无 React/DOM 依赖）。
+- `src/geometry/lineage.ts`：**纯函数**血缘链合并语义（`lineageDegrees` 合并
+  出入度 / `displayKind` 连线显形类别，无 React/DOM 依赖）。
 - `src/geometry/routing.ts`：**纯函数**正交路由（`segHitsObstacle` /
   `routeOrthogonal` / `routeEdgePath` 引出接入矩阵）。
 - `src/client/index.ts`：UI —— 组件、拖拽、详情、渲染；几何逻辑只做薄封装。
@@ -98,7 +108,7 @@
 
 ```bash
 npm run build          # tsc host + tsdown client（借 dsh checkout 工具链）
-npm test               # pretest 自动 build，再跑 27 个单测（parse + 几何）
+npm test               # pretest 自动 build，再跑全部单测（parse + 几何 + 血缘链）
 # 注入（dsh-super-injector）：dev_inject_plugin dir=<本目录>
 # 改码后：npm run build -> dev_reload_package session-timeline -> 浏览器刷新
 ```

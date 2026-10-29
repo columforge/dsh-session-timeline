@@ -64,6 +64,29 @@ test('手工链：父创建晚于子也按拓扑序分派（子仍下沉）', ()
   assert.equal(l.depthOf.get('c'), (l.depthOf.get('p') ?? 0) + 1)
 })
 
+test('手工链式传播：深度行跨连续手工边传递（A→B→C 同侧叠两层）', () => {
+  const nodes = [node('a', 1), node('b', 2), node('c', 3)]
+  const l = computeLayout(nodes, [], [
+    { from: 'a', to: 'b' },
+    { from: 'b', to: 'c' },
+  ])
+  assert.equal(l.sideOf.get('b'), l.sideOf.get('a'))
+  assert.equal(l.sideOf.get('c'), l.sideOf.get('a'))
+  assert.equal(l.depthOf.get('a'), 0)
+  assert.equal(l.depthOf.get('b'), 1)
+  assert.equal(l.depthOf.get('c'), 2)
+  assert.equal(l.maxDepth, 2)
+})
+
+test('混合链传播：原生边接手工边连续下沉（P→B 原生，B→C 手工）', () => {
+  const nodes = [node('p', 1), node('b', 2), node('c', 3)]
+  const l = computeLayout(nodes, [{ from: 'p', to: 'b' }], [{ from: 'b', to: 'c' }])
+  assert.equal(l.sideOf.get('b'), l.sideOf.get('p'))
+  assert.equal(l.sideOf.get('c'), l.sideOf.get('b'))
+  assert.equal(l.depthOf.get('b'), 1)
+  assert.equal(l.depthOf.get('c'), 2)
+})
+
 test('环：无法拓扑分派时兜底为独立节点（深度 0）', () => {
   const nodes = [node('a', 1), node('b', 2)]
   const l = computeLayout(nodes, [], [{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }])

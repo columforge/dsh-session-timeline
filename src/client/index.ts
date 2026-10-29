@@ -2,9 +2,11 @@
  * @dsh-external/session-timeline — client：右侧边栏页签（会话时间线）。
  * 鱼骨时间线：中央水平主轴（右端箭头），轴上日期刻度（YY-MM-DD，日期变化
  * 处标注、文字放鱼刺对侧）；会话按创建时间从左到右交替分布在轴上下两侧，
- * 鱼刺竖线连到轴。血缘（handoff/分支）为实线弯折线：父近轴边 → 轴侧通道 →
- * 水平至子列 → 进子节点左侧（箭头向右）；手工衔接为橙色虚线弯折线（同向
- * 左侧入口）。
+ * 鱼刺竖线连到轴。血缘链 = 原生边（handoff/分支）∪ 手工衔接，链上语义
+ * （出入度、分支判定、⑂N 徽章、连线显形类别）按合并链计算（纯函数见
+ * ../geometry/lineage）：原生为实线弯折线（父近轴边 → 轴侧通道 →
+ * 水平至子列 → 进子节点左侧，蓝 = 链式、紫 = 扇出）；手工衔接为橙色
+ * 虚线弯折线（同向左侧入口，扇出时原生边同样显形为分支紫）。
  * 「handoff」标签 = 调用过 handoff skill（handoffUsed）或以 handoff 种子
  * 开场（isSeeded）——不按首条消息含 handoff 字样判定。首对话调用过
  * handoff skill 且无前驱 → 紫框（待接前驱）；消息中出现过 handoff skill
@@ -19,6 +21,7 @@ import {
   computeLayout, colX, nodeTop, SPACING, NODE_W, NODE_H,
 } from '../geometry/layout.js'
 import { routeEdgePath, OBST_PAD, type Obstacle } from '../geometry/routing.js'
+import { lineageDegrees, displayKind } from '../geometry/lineage.js'
 const h = React.createElement
 const { useEffect, useMemo, useRef, useState } = React
 
@@ -321,27 +324,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     return () => { ctrl.abort() }
   }, [selected, workspace])
 
-  /* 出入度（原生 + 手工），用于 handoff 强调判定与详情展示 */
-  const degree = useMemo(() => {
-    const m = new Map<string, { in: number; out: number }>()
-    for (const n of nodes) m.set(n.id, { in: 0, out: 0 })
-    for (const e of edges) {
-      const f = m.get(e.from); const t = m.get(e.to)
-      if (f !== undefined) f.out += 1
-      if (t !== undefined) t.in += 1
-    }
-    for (const l of manualLinks) {
-      const f = m.get(l.from); const t = m.get(l.to)
-      if (f !== undefined) f.out += 1
-      if (t !== undefined) t.in += 1
-    }
-    return m
-  }, [nodes, edges, manualLinks])
-  const childCount = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const e of edges) m.set(e.from, (m.get(e.from) ?? 0) + 1)
-    return m
-  }, [edges])
+  /* 血缘链合并出入度（原生 + 手工同权）：金紫框判据、⑂N 徽章、分支显形
+   * 判定、详情区血缘/衔接到叙述共用一份（纯函数 lineageDegrees）。 */
+  const degree = useMemo(() => lineageDegrees(edges, manualLinks), [edges, manualLinks])
 
   /* 障碍集：全部节点框（外扩 2px）；跨边共享的通道占用表（拥挤惩罚） */
   const obstacles = useMemo<Obstacle[]>(() => nodes.map((n) => ({
@@ -423,14 +408,24 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const sel = selected !== null ? byId.get(selected) : undefined
   const selManualIn = sel !== undefined ? manualLinks.filter((l) => l.to === sel.id) : []
   const selManualOut = sel !== undefined ? manualLinks.filter((l) => l.from === sel.id) : []
-  const selNativeOut = sel !== undefined ? edges.filter((e) => e.from === sel.id) : []
+  /* 合并链叙述：后继 = 原生出边 + 手工出边（详情「衔接到」行共用） */
+  const selOut = sel !== undefined
+    ? [
+        ...edges.filter((e) => e.from === sel.id).map((e) => ({
+          id: e.to,
+          mark: displayKind(e, degree) === 'branch' ? '（分支）' : '',
+        })),
+        ...selManualOut.map((l) => ({ id: l.to, mark: '（手工）' })),
+      ]
+    : []
   const titleOf = (id: string): string => byId.get(id)?.title ?? shortId(id)
   const wsLabel = (w: Workspace): string => {
     const tail = w.cwd !== null && w.cwd !== '' ? w.cwd.split('/').filter(Boolean).pop() ?? w.cwd : w.bucket
     return tail + '（' + String(w.sessions) + '）'
   }
-  const handoffCount = edges.filter((e) => e.kind === 'handoff').length
-  const branchCount = edges.filter((e) => e.kind === 'branch').length
+  /* 统计口径 = 连线显形类别（合并出度判定），与画布上实际颜色一致 */
+  const handoffCount = edges.filter((e) => displayKind(e, degree) === 'handoff').length
+  const branchCount = edges.filter((e) => displayKind(e, degree) === 'branch').length
 
   const nodeCard = (n: SNode): unknown => {
     const i = layout.colOf.get(n.id) ?? 0
@@ -449,7 +444,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     if (nudgeFirst && nudgeLast) shadow = 'inset 0 0 0 2px ' + LAST_NUDGE
     if (isSel) shadow = (shadow === 'none' ? '' : shadow + ', ') + '0 0 0 2px ' + ACCENT
     else if (isDragSrc) shadow = '0 0 0 2px ' + MANUAL
-    const kids = childCount.get(n.id) ?? 0
+    /* ⑂N 徽章 = 合并出度（原生 + 手工后继），血缘链扇出口径 */
+    const kids = deg?.out ?? 0
     return h('div', {
       key: n.id,
       'data-node-id': n.id,
@@ -705,17 +701,19 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             }
             return lines
           })(),
-          /* 原生血缘弯折线：蓝 = handoff，紫 = 分支（箭头向右进子左侧） */
+          /* 原生血缘弯折线：显形类别按合并出度判定——蓝 = 链式 handoff，
+           * 紫 = 分支/扇出（父另有手工后继时单子边也显形为分支） */
           ...edges.map((e, i) => {
             if (!layout.colOf.has(e.from) || !layout.colOf.has(e.to)) return null
-            const color = e.kind === 'branch' ? BRANCH : ACCENT
+            const kind = displayKind(e, degree)
+            const color = kind === 'branch' ? BRANCH : ACCENT
             return h('path', {
               key: 'n' + String(i),
               d: routeEdge(e.from, e.to, i),
               fill: 'none',
               stroke: color,
               strokeWidth: 1.6,
-              markerEnd: e.kind === 'branch' ? 'url(#st-arrow-branch)' : 'url(#st-arrow-handoff)',
+              markerEnd: kind === 'branch' ? 'url(#st-arrow-branch)' : 'url(#st-arrow-handoff)',
               opacity: 0.85,
             })
           }),
@@ -750,7 +748,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     /* 详情区：选中节点 */
     sel === undefined
       ? h('div', { style: { color: DIM, fontSize: 12 } },
-          '会话按创建时间分布在时间轴上下（handoff 链向轴外侧叠深度行）；拖动节点到另一节点建立手工衔接；双击切换到该会话。弯折线：蓝 = handoff 衔接、紫 = 分支、虚线橙 = 手工衔接（均从左侧进入目标）。紫框 = 首对话调用过 handoff 且无前驱；金框 = 消息中出现过 handoff skill 调用且无后继；选中会话可在详情区查看每次调用的轮次与时间；handoff 标签 = 首条消息含 handoff 文档。')
+          '会话按创建时间分布在时间轴上下（handoff 链向轴外侧叠深度行）；拖动节点到另一节点建立手工衔接；双击切换到该会话。血缘链 = 原生边 + 手工衔接：⑂N 徽章、分支判定、金紫框出入度、详情血缘叙述均按合并链计算。弯折线：蓝 = 链式 handoff、紫 = 分支/扇出（父另有手工后继时原生边也显形为分支）、虚线橙 = 手工衔接（均从左侧进入目标）。紫框 = 首对话调用过 handoff 且无前驱；金框 = 消息中出现过 handoff skill 调用且无后继；选中会话可在详情区查看每次调用的轮次与时间；handoff 标签 = 首条消息含 handoff 文档。')
       : h('div', {
           title: '滚轮上下滚动切换：首轮 ⇄ 末轮',
           onWheel: (ev: React.WheelEvent): void => {
@@ -777,13 +775,28 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               ? ' · 日志创建 ' + fmt(sel.logCreatedAt) : '') +
             ' · ' + bucketTail(sel.bucket) +
             (sel.seeded ? ' · handoff 种子开场' : '')),
-          sel.parent === null
-            ? h('div', { style: { fontSize: 12, color: DIM } }, '血缘：无父会话（根会话）')
-            : byId.has(sel.parent)
-              ? h('div', { style: { fontSize: 12 } }, '血缘：衔接自「' + titleOf(sel.parent) + '」' +
-                  ((childCount.get(sel.parent) ?? 0) >= 2 ? '（分支）' : ''))
-              : h('div', { style: { fontSize: 12, color: DIM } },
-                  '血缘：父会话 ' + shortId(sel.parent) + ' 不在当前视图（跨区 handoff 或已删除）'),
+          /* 血缘行 = 合并链前驱叙述：原生父（在/不在视图）+ 手工入边（标注手工）；
+           * 全无前驱才报根会话。分支标注按合并出度（父的后继 ≥ 2）。 */
+          (() => {
+            const parts: string[] = []
+            let nativeNote: string | null = null
+            let nativeMissing = false
+            if (sel.parent !== null) {
+              if (byId.has(sel.parent)) {
+                nativeNote = '衔接自「' + titleOf(sel.parent) + '」' +
+                  ((degree.get(sel.parent)?.out ?? 0) >= 2 ? '（分支）' : '')
+              } else {
+                nativeNote = '父会话 ' + shortId(sel.parent) + ' 不在当前视图（跨区 handoff 或已删除）'
+                nativeMissing = true
+              }
+            }
+            if (nativeNote !== null) parts.push(nativeNote)
+            for (const l of selManualIn) parts.push('衔接自「' + titleOf(l.from) + '」（手工）')
+            /* 全无前驱 = 根会话；仅剩视图外原生父（无手工入边）保持弱化灰 */
+            const dim = parts.length === 0 || (nativeMissing && selManualIn.length === 0)
+            return h('div', { style: { fontSize: 12, color: dim ? DIM : undefined } },
+              '血缘：' + (parts.length > 0 ? parts.join('；') : '无父会话（根会话）'))
+          })(),
           /* handoff skill 调用明细：每次调用的轮次/时间/消息 seq；金紫框状态对账 */
           sel.handoffHits.length > 0
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
@@ -801,9 +814,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                 }, '· 第 ' + String(hit.turn) + ' 轮 · ' + (hit.at > 0 ? fmtFull(hit.at) : '时间未知') + ' · 消息 #' + String(hit.seq))),
               )
             : null,
-          selNativeOut.length > 0
+          selOut.length > 0
             ? h('div', { style: { fontSize: 12 } },
-                '衔接到：' + selNativeOut.map((e) => '「' + titleOf(e.to) + '」' + (e.kind === 'branch' ? '（分支）' : '')).join('、'))
+                '衔接到：' + selOut.map((o) => '「' + titleOf(o.id) + '」' + o.mark).join('、'))
             : null,
           /* 首/末轮 + handoff 调用轮对话（并排翻页，默认首轮；内容区滚轮上下滑动） */
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
