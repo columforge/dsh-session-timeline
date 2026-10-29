@@ -2,8 +2,9 @@
  * @dsh-external/session-timeline — 会话时间线（右栏页签）。
  * Host 侧：扫描 ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd，
  * 提取 header（createdAt / parentSession / isSeeded / cwd）、首条真实用户消息
- * 时间（会话创建时间口径）、最后一条 session/title 标题、以及首末对话是否调用过
- * handoff skill（user/message + source.kind=skill-invocation + name=handoff）。
+ * 时间（会话创建时间口径）、最后一条 session/title 标题、以及 handoff skill
+ * 调用明细（user/message + source.kind=skill-invocation + name=handoff；
+ * 每次调用的 seq/time/所属轮次，解析逻辑见 ./parse）。
  * 顶层会话（id 带 session- 前缀）作为时间线节点；parentSession 指向桶内
  * 顶层会话构成原生边——父会话单子 = handoff 衔接，多子 = 分支。
  * 手工拖拽衔接按工作区隔离存 ~/.dsh/session-timeline/<bucket>.json。
@@ -20,6 +21,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 import z from 'schemastery'
+import { parseLog } from './parse.js'
+import type { HandoffHit } from './parse.js'
 
 export const name = '@dsh-external/session-timeline'
 export const inject = ['webServer']
@@ -54,8 +57,10 @@ export interface SessionNode {
   lastAt: number
   /** 首个对话内调用过 handoff skill */
   handoffFirst: boolean
-  /** 最后一个对话内调用过 handoff skill */
-  handoffLast: boolean
+  /** 消息中出现任意 handoff skill 调用（待接后继金框判据，不限末窗口） */
+  handoffUsed: boolean
+  /** handoff skill 调用明细（seq/time/轮次，按日志顺序） */
+  handoffHits: HandoffHit[]
 }
 
 /** 原生边：handoff（父单子，链式衔接）/ branch（父多子，分叉）。 */
@@ -87,9 +92,6 @@ interface Doc {
 }
 
 const SESSION_FILE = 'session.v4.jsonl.zstd'
-const TITLE_MARK = '"type":"session/title"'
-const USER_MSG_MARK = '"type":"user/message"'
-const HANDOFF_MARK = '"kind":"skill-invocation","name":"handoff"'
 const ZSTD_MAGIC = 0xFD2FB528
 /** 全局时间线哨兵桶名（/list?workspace=__global__ 聚合所有工作区）。 */
 export const GLOBAL_BUCKET = '__global__'
@@ -151,120 +153,6 @@ function decompressLog(buffer: Buffer): string | null {
     return Buffer.concat(parts).toString('utf8')
   } catch {
     return null
-  }
-}
-
-interface ParsedLog {
-  /** header.createdAt（会话对象落盘时刻；仅作回落与展示参考） */
-  createdAt: number
-  /** 首条真实用户消息的 time（会话创建时间口径；0 = 尚无用户消息） */
-  firstUserAt: number
-  /** 日志末事件 time（最后活动） */
-  lastAt: number
-  parent: string | null
-  seeded: boolean
-  title: string | null
-  cwd: string | null
-  /** 首条真实用户消息内容含 handoff 文档引用（handoff 新会话判据） */
-  handoffSeed: boolean
-  handoffFirst: boolean
-  handoffLast: boolean
-}
-
-function parseLog(text: string): ParsedLog | null {
-  const nl = text.indexOf('\n')
-  if (nl <= 0) return null
-  let header: unknown
-  try { header = JSON.parse(text.slice(0, nl)) } catch { return null }
-  const hd = header as { type?: unknown; id?: unknown; createdAt?: unknown; parentSession?: unknown; isSeeded?: unknown; cwd?: unknown }
-  if (hd?.type !== 'session' || typeof hd.id !== 'string') return null
-
-  let title: string | null = null
-  let idx = text.indexOf(TITLE_MARK)
-  while (idx >= 0) {
-    const lineStart = text.lastIndexOf('\n', idx - 1) + 1
-    let lineEnd = text.indexOf('\n', idx)
-    if (lineEnd < 0) lineEnd = text.length
-    try {
-      const ev = JSON.parse(text.slice(lineStart, lineEnd)) as { data?: { title?: unknown } }
-      if (typeof ev?.data?.title === 'string' && ev.data.title.trim() !== '') title = ev.data.title
-    } catch { /* 撕裂/损坏行跳过 */ }
-    idx = text.indexOf(TITLE_MARK, idx + TITLE_MARK.length)
-  }
-
-  /* 轮次窗口：真实用户消息（source.kind=user）分隔；handoff skill 调用 =
-   * user/message + source{kind:skill-invocation,name:handoff}。首窗口 = 第二条
-   * 真实用户消息之前；末窗口 = 最后一条真实用户消息之后。
-   * handoff 新会话判据：首条真实用户消息文本含 handoff 文档引用（含
-   * handoff 字样即命中，如“读 handoff 文档”“handoff-xxx.md”）。 */
-  const userPos: number[] = []
-  let firstUserText: string | null = null
-  let firstUserAt = 0
-  let u = text.indexOf(USER_MSG_MARK)
-  while (u >= 0) {
-    const lineStart = text.lastIndexOf('\n', u - 1) + 1
-    let lineEnd = text.indexOf('\n', u)
-    if (lineEnd < 0) lineEnd = text.length
-    try {
-      const raw = text.slice(lineStart, lineEnd)
-      const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
-      if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user') {
-        userPos.push(u)
-        if (firstUserAt === 0 && typeof ev.time === 'number' && ev.time > 0) firstUserAt = ev.time
-        if (firstUserText === null && Array.isArray(ev.data.content)) {
-          const joined = ev.data.content
-            .filter((c) => c?.type === 'text' && typeof c.text === 'string')
-            .map((c) => String(c.text))
-            .join(' ')
-          if (joined.trim() !== '') firstUserText = joined
-        }
-      }
-    } catch { /* 跳过 */ }
-    u = text.indexOf(USER_MSG_MARK, u + USER_MSG_MARK.length)
-  }
-  const handoffSeed = firstUserText !== null && firstUserText.toLowerCase().includes('handoff')
-
-  /* 最后活动时间：从日志末尾向前找第一条可解析且带 time 的事件（容忍撕裂尾行） */
-  let lastAt = typeof hd.createdAt === 'number' ? hd.createdAt : 0
-  {
-    let pos = text.length
-    for (let guard = 0; guard < 64 && pos > 0; guard += 1) {
-      const lineEnd = pos
-      const lineStart = text.lastIndexOf('\n', pos - 2) + 1
-      pos = lineStart > 0 ? lineStart - 1 : 0
-      const raw = text.slice(lineStart, lineEnd).trim()
-      if (raw === '' || !raw.includes('"time"')) continue
-      try {
-        const ev = JSON.parse(raw) as { time?: unknown }
-        if (typeof ev.time === 'number' && ev.time > 0) { lastAt = ev.time; break }
-      } catch { /* 撕裂/截断行继续向前 */ }
-    }
-  }
-
-  let handoffFirst = false
-  let handoffLast = false
-  let hh = text.indexOf(HANDOFF_MARK)
-  if (hh >= 0) {
-    const firstEnd = userPos.length >= 2 ? userPos[1] : Number.MAX_SAFE_INTEGER
-    const lastStart = userPos.length >= 1 ? userPos[userPos.length - 1] : 0
-    while (hh >= 0) {
-      if (hh < firstEnd) handoffFirst = true
-      if (hh >= lastStart) handoffLast = true
-      hh = text.indexOf(HANDOFF_MARK, hh + HANDOFF_MARK.length)
-    }
-  }
-
-  return {
-    createdAt: typeof hd.createdAt === 'number' ? hd.createdAt : 0,
-    firstUserAt,
-    lastAt,
-    parent: typeof hd.parentSession === 'string' && hd.parentSession !== '' ? hd.parentSession : null,
-    seeded: hd.isSeeded === true,
-    title,
-    cwd: typeof hd.cwd === 'string' ? hd.cwd : null,
-    handoffSeed,
-    handoffFirst,
-    handoffLast,
   }
 }
 
@@ -361,7 +249,8 @@ export function apply(ctx: Context, config: Config): void {
                 cwd: parsed.cwd,
                 bucket,
                 handoffFirst: parsed.handoffFirst,
-                handoffLast: parsed.handoffLast,
+                handoffUsed: parsed.handoffUsed,
+                handoffHits: parsed.handoffHits,
               }
             : null,
         }

@@ -6,8 +6,9 @@
  * 水平至子列 → 进子节点左侧（箭头向右）；手工衔接为橙色虚线弯折线（同向
  * 左侧入口）。
  * handoff 新会话 = 首条用户消息内容含 handoff 文档引用（host 判定
- * handoffSeed）→「handoff」标签。首/末对话调用过 handoff skill 且对应方向
- * 无衔接边的节点：紫框 = 待接前驱，金框 = 待接后继。
+ * handoffSeed）→「handoff」标签。首对话调用过 handoff skill 且无前驱 →
+ * 紫框（待接前驱）；消息中出现过 handoff skill 调用（不限末窗口）且无后继 →
+ * 金框（待接后继）；选中详情区列出每次调用的轮次/时间/消息 seq。
  * 双击节点 = 切换到该会话；头部「全局时间线」开关聚合所有工作区。
  * 构建：tsdown → lib/client.js（ModuleLoader 注册）。
  * ⚠️ client 须 export const inject；slots.register 必须带 name 字段。
@@ -64,7 +65,10 @@ type SNode = {
   cwd: string | null
   bucket: string
   handoffFirst: boolean
-  handoffLast: boolean
+  /** 消息中出现任意 handoff skill 调用（待接后继金框判据，不限末窗口） */
+  handoffUsed: boolean
+  /** handoff skill 调用明细（seq/time/轮次，按日志顺序） */
+  handoffHits: { seq: number; at: number; turn: number }[]
 }
 type NEdge = { from: string; to: string; kind: 'handoff' | 'branch' }
 type MLink = { from: string; to: string; created_at: string }
@@ -435,7 +439,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const isSel = selected === n.id
     const deg = degree.get(n.id)
     const nudgeFirst = n.handoffFirst && (deg?.in ?? 0) === 0
-    const nudgeLast = n.handoffLast && (deg?.out ?? 0) === 0
+    /* 金框（待接后继）= 消息中出现任意 handoff skill 调用且无后继边 */
+    const nudgeLast = n.handoffUsed && (deg?.out ?? 0) === 0
     let border = 'var(--dsw-alias-border-primary, rgba(128,128,128,0.35))'
     let shadow = 'none'
     if (nudgeFirst) border = FIRST_NUDGE
@@ -742,7 +747,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     /* 详情区：选中节点 */
     sel === undefined
       ? h('div', { style: { color: DIM, fontSize: 12 } },
-          '会话按创建时间分布在时间轴上下（handoff 链向轴外侧叠深度行）；拖动节点到另一节点建立手工衔接；双击切换到该会话。弯折线：蓝 = handoff 衔接、紫 = 分支、虚线橙 = 手工衔接（均从左侧进入目标）。紫框 = 首对话调用过 handoff 且无前驱；金框 = 末对话调用过 handoff 且无后继；handoff 标签 = 首条消息含 handoff 文档。')
+          '会话按创建时间分布在时间轴上下（handoff 链向轴外侧叠深度行）；拖动节点到另一节点建立手工衔接；双击切换到该会话。弯折线：蓝 = handoff 衔接、紫 = 分支、虚线橙 = 手工衔接（均从左侧进入目标）。紫框 = 首对话调用过 handoff 且无前驱；金框 = 消息中出现过 handoff skill 调用且无后继；选中会话可在详情区查看每次调用的轮次与时间；handoff 标签 = 首条消息含 handoff 文档。')
       : h('div', {
           title: '滚轮上下滚动切换：首轮 ⇄ 末轮',
           onWheel: (ev: React.WheelEvent): void => {
@@ -776,12 +781,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                   ((childCount.get(sel.parent) ?? 0) >= 2 ? '（分支）' : ''))
               : h('div', { style: { fontSize: 12, color: DIM } },
                   '血缘：父会话 ' + shortId(sel.parent) + ' 不在当前视图（跨区 handoff 或已删除）'),
-          sel.handoffFirst || sel.handoffLast
-            ? h('div', { style: { fontSize: 12 } },
-                'handoff skill：' +
-                (sel.handoffFirst ? '首个对话' + ((degree.get(sel.id)?.in ?? 0) === 0 ? '（待接前驱·紫）' : '') : '') +
-                (sel.handoffFirst && sel.handoffLast ? ' + ' : '') +
-                (sel.handoffLast ? '最后对话' + ((degree.get(sel.id)?.out ?? 0) === 0 ? '（待接后继·金）' : '') : ''))
+          /* handoff skill 调用明细：每次调用的轮次/时间/消息 seq；金紫框状态对账 */
+          sel.handoffHits.length > 0
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                h('div', { style: { fontSize: 12 } },
+                  'handoff skill：共 ' + String(sel.handoffHits.length) + ' 次调用',
+                  sel.handoffFirst && (degree.get(sel.id)?.in ?? 0) === 0
+                    ? h('span', { style: { color: FIRST_NUDGE } }, '（待接前驱·紫）')
+                    : null,
+                  sel.handoffUsed && (degree.get(sel.id)?.out ?? 0) === 0
+                    ? h('span', { style: { color: LAST_NUDGE } }, '（待接后继·金）')
+                    : null),
+                ...sel.handoffHits.map((hit) => h('div', {
+                  key: 'handoff-hit-' + String(hit.seq) + '-' + String(hit.at),
+                  style: { color: DIM, fontSize: 11.5, fontFamily: MONO },
+                }, '· 第 ' + String(hit.turn) + ' 轮 · ' + (hit.at > 0 ? fmtFull(hit.at) : '时间未知') + ' · 消息 #' + String(hit.seq))),
+              )
             : null,
           selNativeOut.length > 0
             ? h('div', { style: { fontSize: 12 } },

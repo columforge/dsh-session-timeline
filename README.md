@@ -32,8 +32,10 @@
   左缘；父在子右 => 子入右缘），次选外侧边。防重合微扰沿边滑动（出口水平
   ±10px、接入竖直 ±6px），不得垂直推回框内。
 - **handoff 新会话标签**：首条真实用户消息内容含 handoff 文档引用 →「handoff」。
-- **handoff skill 强调**：首个/最后一个对话内调用过 handoff skill 且对应方向
-  无衔接边时强调边框——首个 = 紫色（待接前驱），最后 = 金色（待接后继）。
+- **handoff skill 强调**：紫框 = 首个对话内调用过 handoff skill 且无前驱边
+  （待接前驱）；金框 = **消息中出现过任意 handoff skill 调用**（不限末对话，
+  中间轮也算）且无后继边（待接后继）。选中会话在详情区列出每次调用：
+  轮次 / 时间 / 消息 seq。
 - **工作区切换**：头部下拉首项「当前会话工作区」= 跟随当前会话所属桶，其余为
   各工作区（按最近活动排序，显示 cwd 尾名与**顶层会话数**）。
 - **页签计数**：标题「会话时间线（N）」= 当前面板视图的顶层会话数——跟随工作区
@@ -55,8 +57,10 @@
 - 会话元数据：`~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`
   的 header 行（`createdAt` / `parentSession` / `isSeeded` / `cwd`）、最后一条
   事件 time（最后活动）、最后一条 `session/title` 事件、首条真实用户消息
-  时间与内容、首末对话窗口内的 handoff skill 调用（zstd 多帧解码，mtime+size
-  缓存，容忍尾部撕裂帧；轮次窗口以真实用户消息 `source.kind=user` 分隔）。
+  时间与内容、handoff skill 调用明细（每次调用 = `user/message` +
+  `source{kind:skill-invocation,name:handoff}`，记录 seq/time/所属轮次；
+  zstd 多帧解码，mtime+size 缓存，容忍尾部撕裂帧；轮次以真实用户消息
+  `source.kind=user` 分隔）。
 - **会话创建时间 = 首条真实用户消息（`source.kind=user`）的 time**；尚无用户
   消息的会话回落 header `createdAt`。header 原值以 `logCreatedAt` 随节点
   返回，详情区在两者不同时显示「日志创建」——用于识别"打开过但很久之后才
@@ -67,26 +71,29 @@
 - `GET /workspaces` → `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }`
 - `GET /list?workspace=<桶|__global__>&session=<当前会话id>`（workspace 优先）→
   `{ ok, bucket, unreadable, sessions[](含 createdAt/logCreatedAt/lastAt/
-  handoffSeed/bucket), edges[], manualLinks[] }`
+  handoffSeed/handoffFirst/handoffUsed/handoffHits[{seq,at,turn}]/bucket),
+  edges[], manualLinks[] }`
 - `POST /link` `{ workspace?, session?, from, to }` → 按创建时间归一定向后落账（幂等）
 - `POST /unlink` `{ workspace?, session?, from, to }` → 删除该手工衔接（双向匹配）
 
 ## 源码结构
 
-- `src/index.ts`：host —— zstd 会话解析（header/首条用户消息/lastAt/标题/
-  handoff 判定）、`list` / `workspaces` / `turns` / `link` / `unlink` API。
+- `src/index.ts`：host —— 会话桶扫描 + `list` / `workspaces` / `turns` /
+  `link` / `unlink` API。
+- `src/parse.ts`：**纯函数**会话日志解析（`parseLog`：header/标题/首条用户
+  消息/lastAt/handoff 调用明细，无插件依赖）。
 - `src/geometry/layout.ts`：**纯函数**布局（`computeLayout` / `colX` / `nodeTop`
   + 版面常量，无 React/DOM 依赖）。
 - `src/geometry/routing.ts`：**纯函数**正交路由（`segHitsObstacle` /
   `routeOrthogonal` / `routeEdgePath` 引出接入矩阵）。
 - `src/client/index.ts`：UI —— 组件、拖拽、详情、渲染；几何逻辑只做薄封装。
-- `test/*.test.mjs`：几何单测（node:test，导入 `lib/geometry/*.js`）。
+- `test/*.test.mjs`：单测（node:test，导入 `lib/parse.js` / `lib/geometry/*.js`）。
 
 ## 构建 / 测试 / 注入
 
 ```bash
 npm run build          # tsc host + tsdown client（借 dsh checkout 工具链）
-npm test               # pretest 自动 build，再跑 17 个几何单测
+npm test               # pretest 自动 build，再跑 27 个单测（parse + 几何）
 # 注入（dsh-super-injector）：dev_inject_plugin dir=<本目录>
 # 改码后：npm run build -> dev_reload_package session-timeline -> 浏览器刷新
 ```
