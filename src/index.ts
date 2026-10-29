@@ -513,6 +513,8 @@ export function apply(ctx: Context, config: Config): void {
           const clip = (t: string): string => t.length > 4000 ? t.slice(0, 4000) + '…（已截断）' : t
           interface Turn { user: string; assistant: string; at: number }
           const turns: Turn[] = []
+          /** handoff skill 调用所在轮（1 起）；同轮多次调用去重 */
+          const handoffTurnSet = new Set<number>()
           let pos = 0
           for (;;) {
             const nl = text.indexOf('\n', pos)
@@ -521,10 +523,15 @@ export function apply(ctx: Context, config: Config): void {
             pos = nl < 0 ? text.length : nl + 1
             if (raw.length > 2 && (raw.includes('"user/message"') || raw.includes('"assistant/message"'))) {
               try {
-                const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
+                const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown; name?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
                 if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user' && Array.isArray(ev.data.content)) {
                   const t = ev.data.content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => String(c.text)).join('\n')
                   turns.push({ user: clip(t), assistant: '', at: typeof ev.time === 'number' ? ev.time : 0 })
+                } else if (ev?.type === 'user/message'
+                  && ev?.data?.source?.kind === 'skill-invocation'
+                  && ev?.data?.source?.name === 'handoff') {
+                  /* 调用行属当前已开的轮；开局无用户消息时（turns.length === 0）无对话可展示，跳过 */
+                  if (turns.length > 0) handoffTurnSet.add(turns.length)
                 } else if (ev?.type === 'assistant/message' && turns.length > 0) {
                   // 该轮可能有多次 assistant 输出（工具调用分段）：记录最后一次正式回复；
                   // 整轮无正式回复时回退最后一次推理
@@ -544,12 +551,16 @@ export function apply(ctx: Context, config: Config): void {
             }
             if (nl < 0) break
           }
-          if (turns.length === 0) { json(res, 200, { ok: true, turns: 0 }); return }
+          if (turns.length === 0) { json(res, 200, { ok: true, turns: 0, handoffTurns: [] }); return }
           json(res, 200, {
             ok: true,
             turns: turns.length,
             first: turns[0],
             last: turns[turns.length - 1],
+            /* handoff skill 调用所在轮的完整对话（用户/助手，同款 4000 字截断） */
+            handoffTurns: [...handoffTurnSet].sort((a, b) => a - b)
+              .filter((turn) => turn >= 1 && turn <= turns.length)
+              .map((turn) => ({ turn, ...turns[turn - 1] })),
           })
         } catch (e) {
           json(res, 500, { ok: false, error: '解析失败：' + String(e).slice(0, 120) })

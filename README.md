@@ -44,10 +44,13 @@
   不计）；新建会话需先落盘产生 `session-*` 目录才会加一。
 - **双击切换**：双击节点 = `uiWorkspace.openSession`（跨工作区生效）；详情区
   也有「切换到该会话」按钮。
-- **首/末轮对话**：详情区「首轮对话（默认）/ 末轮对话」两页（真实用户消息
-  分轮；助手文本 = 该轮最后一次回复，整轮无正式回复回退 `[推理]`；各截断
-  4000 字符）。滚轮分区：详情框内 = 切页，对话文本框内 = 翻看内容。
-  API：`GET /turns?session=<id>&workspace=<桶>`。
+- **首/末轮 + handoff 对话**：详情区「首轮对话（默认）／handoff 第N轮（每处
+  调用一枚，同轮去重）／末轮对话」并排翻页（真实用户消息分轮；助手文本 =
+  该轮最后一次回复，整轮无正式回复回退 `[推理]`；各截断 4000 字符；handoff
+  页 = 调用 handoff skill 那轮的完整对话）。滚轮分区：详情框内 = 切页，
+  对话文本框内 = 翻看内容。
+  API：`GET /turns?session=<id>&workspace=<桶>` →
+  `{ ok, turns, first, last, handoffTurns[{turn,user,assistant,at}] }`。
 - **工作区隔离**：手工衔接落 `~/.dsh/session-timeline/<bucket>.json`；
   会话存储只读。
 - **已移除**：全貌缩放模式（勿回退）。
