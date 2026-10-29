@@ -48,8 +48,6 @@ export interface SessionNode {
   parent: string | null
   /** header.isSeeded：以 handoff 上下文种子开場 */
   seeded: boolean
-  /** 首条真实用户消息内容含 handoff 文档引用（handoff 新会话判据） */
-  handoffSeed: boolean
   cwd: string | null
   /** 所属工作区（会话存储桶） */
   bucket: string
@@ -245,7 +243,6 @@ export function apply(ctx: Context, config: Config): void {
                 lastAt: parsed.lastAt,
                 parent: parsed.parent,
                 seeded: parsed.seeded,
-                handoffSeed: parsed.handoffSeed,
                 cwd: parsed.cwd,
                 bucket,
                 handoffFirst: parsed.handoffFirst,

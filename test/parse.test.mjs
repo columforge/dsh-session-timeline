@@ -107,8 +107,17 @@ test('原有字段不回归：标题/首用户时间/seed/parent/cwd/末活动',
   assert.equal(p.parent, 'session-p')
   assert.equal(p.seeded, true)
   assert.equal(p.cwd, '/w')
-  assert.equal(p.handoffSeed, true)
+  assert.equal(p.handoffUsed, true)
   assert.equal(p.lastAt, 2100)
+})
+
+test('反例回归（2026-10-29 定夺）：首条消息含 handoff 字样不产生任何 handoff 标记', () => {
+  /* 讨论 handoff 的会话（如“…改为 消息中有使用过 handoff skills。”）不得被误标 */
+  const p = parseLog(log([header(), userMsg('待接后继标签需要改为 消息中有使用过 handoff skills。', 2000)]))
+  assert.equal(p.handoffUsed, false)
+  assert.equal(p.handoffFirst, false)
+  assert.deepEqual(p.handoffHits, [])
+  assert.equal('handoffSeed' in p, false)
 })
 
 test('空文本/坏 header 返回 null', () => {

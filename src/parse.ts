@@ -28,8 +28,6 @@ export interface ParsedLog {
   seeded: boolean
   title: string | null
   cwd: string | null
-  /** 首条真实用户消息内容含 handoff 文档引用（handoff 新会话判据） */
-  handoffSeed: boolean
   /** 首窗口内调用过 handoff skill（待接前驱紫框判据） */
   handoffFirst: boolean
   /** 消息中出现任意 handoff skill 调用（待接后继金框判据，不限末窗口） */
@@ -59,12 +57,10 @@ export function parseLog(text: string): ParsedLog | null {
     idx = text.indexOf(TITLE_MARK, idx + TITLE_MARK.length)
   }
 
-  /* 轮次窗口：真实用户消息（source.kind=user）分隔；handoff skill 调用 =
-   * user/message + source{kind:skill-invocation,name:handoff}。
-   * handoff 新会话判据：首条真实用户消息文本含 handoff 文档引用（含
-   * handoff 字样即命中，如“读 handoff 文档”“handoff-xxx.md”）。 */
+  /* 真实用户消息（source.kind=user）扫描：首条 time = 会话创建时间口径。
+   * 注意：不再按首条消息含 "handoff" 字样做任何判定——讨论 handoff 的会话
+   * 会被误标（2026-10-29 用户定夺，「handoff」标签只认 isSeeded ∪ handoffUsed）。 */
   const userPos: number[] = []
-  let firstUserText: string | null = null
   let firstUserAt = 0
   let u = text.indexOf(USER_MSG_MARK)
   while (u >= 0) {
@@ -77,18 +73,10 @@ export function parseLog(text: string): ParsedLog | null {
       if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user') {
         userPos.push(u)
         if (firstUserAt === 0 && typeof ev.time === 'number' && ev.time > 0) firstUserAt = ev.time
-        if (firstUserText === null && Array.isArray(ev.data.content)) {
-          const joined = ev.data.content
-            .filter((c) => c?.type === 'text' && typeof c.text === 'string')
-            .map((c) => String(c.text))
-            .join(' ')
-          if (joined.trim() !== '') firstUserText = joined
-        }
       }
     } catch { /* 跳过 */ }
     u = text.indexOf(USER_MSG_MARK, u + USER_MSG_MARK.length)
   }
-  const handoffSeed = firstUserText !== null && firstUserText.toLowerCase().includes('handoff')
 
   /* 最后活动时间：从日志末尾向前找第一条可解析且带 time 的事件（容忍撕裂尾行） */
   let lastAt = typeof hd.createdAt === 'number' ? hd.createdAt : 0
@@ -152,7 +140,6 @@ export function parseLog(text: string): ParsedLog | null {
     seeded: hd.isSeeded === true,
     title,
     cwd: typeof hd.cwd === 'string' ? hd.cwd : null,
-    handoffSeed,
     handoffFirst,
     handoffUsed: handoffHits.length > 0,
     handoffHits,

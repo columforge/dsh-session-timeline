@@ -5,10 +5,11 @@
  * 鱼刺竖线连到轴。血缘（handoff/分支）为实线弯折线：父近轴边 → 轴侧通道 →
  * 水平至子列 → 进子节点左侧（箭头向右）；手工衔接为橙色虚线弯折线（同向
  * 左侧入口）。
- * handoff 新会话 = 首条用户消息内容含 handoff 文档引用（host 判定
- * handoffSeed）→「handoff」标签。首对话调用过 handoff skill 且无前驱 →
- * 紫框（待接前驱）；消息中出现过 handoff skill 调用（不限末窗口）且无后继 →
- * 金框（待接后继）；选中详情区列出每次调用的轮次/时间/消息 seq。
+ * 「handoff」标签 = 调用过 handoff skill（handoffUsed）或以 handoff 种子
+ * 开场（isSeeded）——不按首条消息含 handoff 字样判定。首对话调用过
+ * handoff skill 且无前驱 → 紫框（待接前驱）；消息中出现过 handoff skill
+ * 调用（不限末窗口）且无后继 → 金框（待接后继）；选中详情区列出每次调用
+ * 的轮次/时间/消息 seq。
  * 双击节点 = 切换到该会话；头部「全局时间线」开关聚合所有工作区。
  * 构建：tsdown → lib/client.js（ModuleLoader 注册）。
  * ⚠️ client 须 export const inject；slots.register 必须带 name 字段。
@@ -61,7 +62,6 @@ type SNode = {
   lastAt: number
   parent: string | null
   seeded: boolean
-  handoffSeed: boolean
   cwd: string | null
   bucket: string
   handoffFirst: boolean
@@ -506,7 +506,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         },
       }, n.title ?? '（无标题）'),
       h('div', { style: { display: 'flex', gap: 4, marginTop: 'auto', flexWrap: 'wrap' } },
-        n.handoffSeed ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
+        /* 「handoff」标签 = 调用过 handoff skill 或以 handoff 种子开场；
+         * 不按首条消息含 handoff 字样判定（讨论 handoff 的会话会误标） */
+        (n.seeded || n.handoffUsed) ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
         kids >= 2 ? h(P.Tag, { tone: 'info' }, '⑂' + String(kids)) : null,
         nudgeFirst ? h(P.Tag, { tone: 'info' }, '待接前驱') : null,
         nudgeLast ? h(P.Tag, { tone: 'warning' }, '待接后继') : null,
@@ -774,7 +776,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             (sel.logCreatedAt > 0 && sel.logCreatedAt !== sel.createdAt
               ? ' · 日志创建 ' + fmt(sel.logCreatedAt) : '') +
             ' · ' + bucketTail(sel.bucket) +
-            (sel.handoffSeed ? ' · handoff 新会话' : (sel.seeded ? ' · 种子' : ''))),
+            (sel.seeded ? ' · handoff 种子开场' : '')),
           sel.parent === null
             ? h('div', { style: { fontSize: 12, color: DIM } }, '血缘：无父会话（根会话）')
             : byId.has(sel.parent)

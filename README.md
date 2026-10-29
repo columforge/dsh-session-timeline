@@ -31,7 +31,9 @@
   （up 顶 / down 底），次选面向侧缘；接入主选 = 面向侧缘（父在子左 => 子入
   左缘；父在子右 => 子入右缘），次选外侧边。防重合微扰沿边滑动（出口水平
   ±10px、接入竖直 ±6px），不得垂直推回框内。
-- **handoff 新会话标签**：首条真实用户消息内容含 handoff 文档引用 →「handoff」。
+- **「handoff」标签** = 会话**调用过 handoff skill**（`handoffUsed`）或以
+  **handoff 种子开场**（`isSeeded`）。不按首条消息含 handoff 字样判定——
+  讨论 handoff 的会话会被误标（2026-10-29 定夺移除该文字匹配判据）。
 - **handoff skill 强调**：紫框 = 首个对话内调用过 handoff skill 且无前驱边
   （待接前驱）；金框 = **消息中出现过任意 handoff skill 调用**（不限末对话，
   中间轮也算）且无后继边（待接后继）。选中会话在详情区列出每次调用：
@@ -60,7 +62,7 @@
 - 会话元数据：`~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`
   的 header 行（`createdAt` / `parentSession` / `isSeeded` / `cwd`）、最后一条
   事件 time（最后活动）、最后一条 `session/title` 事件、首条真实用户消息
-  时间与内容、handoff skill 调用明细（每次调用 = `user/message` +
+  时间、handoff skill 调用明细（每次调用 = `user/message` +
   `source{kind:skill-invocation,name:handoff}`，记录 seq/time/所属轮次；
   zstd 多帧解码，mtime+size 缓存，容忍尾部撕裂帧；轮次以真实用户消息
   `source.kind=user` 分隔）。
@@ -74,7 +76,7 @@
 - `GET /workspaces` → `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }`
 - `GET /list?workspace=<桶|__global__>&session=<当前会话id>`（workspace 优先）→
   `{ ok, bucket, unreadable, sessions[](含 createdAt/logCreatedAt/lastAt/
-  handoffSeed/handoffFirst/handoffUsed/handoffHits[{seq,at,turn}]/bucket),
+  seeded/handoffFirst/handoffUsed/handoffHits[{seq,at,turn}]/bucket),
   edges[], manualLinks[] }`
 - `POST /link` `{ workspace?, session?, from, to }` → 按创建时间归一定向后落账（幂等）
 - `POST /unlink` `{ workspace?, session?, from, to }` → 删除该手工衔接（双向匹配）
