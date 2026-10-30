@@ -19,7 +19,7 @@ test('空图：无节点时给最小画布宽、无深度', () => {
 })
 
 test('独立节点：列 = 传入顺序，side 按分派奇偶交替', () => {
-  // 分派顺序 = 按 createdAt 升序后从尾部往前 → 后创建者先分派（up）
+  // Assignment order = sort by createdAt ascending, walk from the tail → later-created assigned first (up)
   const nodes = [node('a', 1), node('b', 2)]
   const l = computeLayout(nodes, [], [])
   assert.equal(l.colOf.get('a'), 0)
@@ -28,7 +28,7 @@ test('独立节点：列 = 传入顺序，side 按分派奇偶交替', () => {
   assert.equal(l.sideOf.get('a'), 'down')
   assert.equal(l.depthOf.get('a'), 0)
   assert.equal(l.depthOf.get('b'), 0)
-  // 列中心与行顶
+  // Column centers and row tops
   assert.equal(colX(l, 'a'), SPACING / 2)
   assert.equal(colX(l, 'b'), SPACING + SPACING / 2)
   assert.equal(nodeTop(l, 'b'), l.axisY - GAP - NODE_H)
@@ -52,12 +52,12 @@ test('原生血缘：子继承父侧并下沉一行（深度行）', () => {
   assert.equal(l.depthOf.get('p'), 0)
   assert.equal(l.depthOf.get('c'), 1)
   assert.equal(l.maxDepth, 1)
-  // 深度行在鱼骨外侧：up 侧更深 => 行顶更小
+  // Depth rows sit outside the fishbone: deeper on the up side => smaller row top
   assert.ok(nodeTop(l, 'c') < nodeTop(l, 'p'))
 })
 
 test('手工链：父创建晚于子也按拓扑序分派（子仍下沉）', () => {
-  // x 创建最早，p 最晚；手工链 p -> c（语义 from 前驱）
+  // x created first, p last; manual link p -> c (semantics: from is the predecessor)
   const nodes = [node('x', 1), node('p', 10), node('c', 2)]
   const l = computeLayout(nodes, [], [{ from: 'p', to: 'c' }])
   assert.equal(l.sideOf.get('c'), l.sideOf.get('p'))

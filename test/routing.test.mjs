@@ -58,7 +58,7 @@ test('多框布局：任意起终点均正交且不穿框', () => {
     { x: 0, y: 0, w: 60, h: 40 }, { x: 140, y: 30, w: 60, h: 40 },
     { x: 60, y: 120, w: 100, h: 40 }, { x: 260, y: 100, w: 60, h: 60 },
   ]
-  // 起终点取框外（真实调用恒为框缘外 3px）
+  // Endpoints outside boxes (real calls always sit 3px beyond a box edge)
   const d = routeOrthogonal(obs, 20, 60, 300, 200, new Map())
   assertOrthogonal(d)
   assertNoHits(d, obs)
@@ -73,7 +73,7 @@ test('兜底：起点被困在障碍内时仍输出正交通道（绝不出斜�
   assert.deepEqual(pts[pts.length - 1], [150, 50])
 })
 
-/* ---- routeEdgePath：引出/接入边矩阵（父在子左/右 × 上/下方） ---- */
+/* ---- routeEdgePath: exit/entry edge matrix (parent left/right of child × up/down sides) ---- */
 
 const edgeLayout = (order, createdAtBy, edge) => {
   const nodes = order.map((id) => ({ id, createdAt: createdAtBy[id] }))
@@ -104,7 +104,7 @@ test('矩阵 up 侧 + 父在子左：父出上方、子入左缘', () => {
 })
 
 test('矩阵 up 侧 + 父在子右：父出上方、子入右缘', () => {
-  // 列序 [c, p] => 子在父左；分派仍按创建序：p 先 up、c 继承 up
+  // Column order [c, p] => child left of parent; assignment still by creation order: p first (up), c inherits
   const { layout, obstacles } = edgeLayout(['c', 'p'], { p: 1, c: 2 }, { from: 'p', to: 'c' })
   const j = (0 % 3) - 1
   const d = routeEdgePath({ layout, obstacles, occupied: new Map(), from: 'p', to: 'c', step: 0 })
@@ -116,7 +116,7 @@ test('矩阵 up 侧 + 父在子右：父出上方、子入右缘', () => {
 })
 
 test('矩阵 down 侧 + 父在子左：父出下方、子入左缘', () => {
-  // x 最新先分派 => up；p 次之 => down；c 继承 p（down，深度 1）
+  // x newest, assigned first => up; p next => down; c inherits p (down, depth 1)
   const { layout, obstacles } = edgeLayout(['x', 'p', 'c'], { x: 3, p: 2, c: 1 }, { from: 'p', to: 'c' })
   assert.equal(layout.sideOf.get('p'), 'down')
   const j = (0 % 3) - 1

@@ -1,15 +1,19 @@
 /**
- * 正交避障路由（纯函数，无 React/DOM 依赖；单测入口）。
+ * Orthogonal obstacle-avoiding routing (pure functions, no React/DOM deps; unit-test entry).
  *
- * 节点框（外扩 2px）为障碍，画布取框缘 ±8px 生成正交通道网格；
- * 每条边在网格上跑 A*（代价 = 长度 + 转折 ×10 + 已占用通道拥挤 ×30），
- * 得到不穿任何框的正交折线，任意布局/连线组合自动适配。
+ * Node boxes (padded 2px) are obstacles; the canvas builds an orthogonal
+ * channel grid at box edges ±8px. Each edge runs A* on the grid
+ * (cost = length + turns ×10 + occupied-channel crowding ×30), yielding an
+ * orthogonal polyline that crosses no box and adapts to any layout/link combo.
  *
- * 三个历史坑（回归先查）：
- * 1. 通道坐标集禁含障碍内部点（框中心等）——起终点吸附到内部则起点孤立；
- * 2. 起终点必须取框缘外 3px 精确点（障碍外扩 2px 后框缘在障碍内）；
- * 3. 防重合微扰必须沿边滑动（出口沿顶/底边水平、接入沿缘竖直）——
- *    垂直微扰会把点推回障碍内，同 1 的后果。
+ * Three historical pitfalls (check first on regressions):
+ * 1. Channel coordinates must not include points inside an obstacle (e.g. box
+ *    centers) — endpoints snapping inside get stranded;
+ * 2. Endpoints must be exact points 3px outside the box edge (after the 2px
+ *    obstacle padding the box edge lies inside the obstacle);
+ * 3. Anti-overlap nudges must slide along the edge (exits horizontally along
+ *    the top/bottom edge, entries vertically along the side) — perpendicular
+ *    nudges push the point back inside the obstacle, same effect as 1.
  */
 
 import { colX, nodeTop, NODE_W, NODE_H, type Layout } from './layout.js'
@@ -21,12 +25,12 @@ export const EDGE_PAD = 8
 export const TURN_COST = 10
 export const CROWD_COST = 30
 
-/** 线段 (x1,y1)-(x2,y2)（正交）是否穿过任一障碍（开区间，端点贴边允许）。 */
+/** Does the orthogonal segment (x1,y1)-(x2,y2) cross any obstacle (open interval; edge-touching allowed)? */
 export function segHitsObstacle(x1: number, y1: number, x2: number, y2: number, obs: Obstacle[]): boolean {
   for (const o of obs) {
     const l = o.x; const r = o.x + o.w; const t = o.y; const b = o.y + o.h
     if (x1 === x2) {
-      // 竖直段
+      // vertical segment
       if (x1 > l && x1 < r) {
         const lo = Math.min(y1, y2); const hi = Math.max(y1, y2)
         if (hi > t && lo < b) return true
@@ -48,7 +52,7 @@ export function routeOrthogonal(
   occupied: Map<string, number>,
   corridorYs: number[] = [],
 ): string {
-  /* 通道坐标：所有框缘 ±8 + 起/终点，去重并合并近邻 */
+  /* Channel coordinates: all box edges ±8 plus both endpoints; deduped and near-neighbors merged. */
   const xsRaw: number[] = [sx, tx]
   const ysRaw: number[] = [sy, ty]
   for (const o of obstacles) {
@@ -75,7 +79,7 @@ export function routeOrthogonal(
   const s = { x: xIdx.get(near(xs, sx)) ?? 0, y: yIdx.get(near(ys, sy)) ?? 0 }
   const t = { x: xIdx.get(near(xs, tx)) ?? 0, y: yIdx.get(near(ys, ty)) ?? 0 }
 
-  /* A*：代价 = 步长 + 转折 ×10 + 通道拥挤 ×30（occupied 由调用方传入跨边共享） */
+  /* A*: cost = step + turn ×10 + channel crowding ×30 (occupied is caller-owned and shared across edges). */
   const crowd = (x1: number, y1: number, x2: number, y2: number): number => {
     const key = x1 === x2 ? 'v' + String(x1) : 'h' + String(y1)
     return (occupied.get(key) ?? 0) * CROWD_COST
@@ -118,8 +122,10 @@ export function routeOrthogonal(
     }
   }
   if (!parentMap.has(keyOf(t.x, t.y))) {
-    /* 兜底（A* 网格死角时）：① 经外侧走廊的 U 形（走廊在所有框外，保证不穿框）；
-     * ② 正交 L 形折线（绝不出斜线，穿障碍时取段少的） */
+    /* Fallback when A* hits a grid dead end: ① U-shape via an outer corridor
+     * (corridors lie outside every box, so no box is crossed);
+     * ② orthogonal L polyline (never diagonal; pick the one crossing fewer
+     * obstacles when it does). */
     const bad = (path: string): number => {
       const nums = path.match(/-?\d+(\.\d+)?/g) ?? []
       const pts: [number, number][] = []
@@ -150,7 +156,7 @@ export function routeOrthogonal(
     }
     return best ?? candidates[0]
   }
-  /* 回溯折点 */
+  /* Backtrack waypoints. */
   const pts: [number, number][] = []
   let ck = keyOf(t.x, t.y)
   const seen = new Set<string>()
@@ -163,7 +169,7 @@ export function routeOrthogonal(
   }
   pts.unshift([sx, sy])
   pts.push([tx, ty])
-  /* 折线转 path：同向点合并 + mark 通道拥挤（供后续边代价） */
+  /* Polyline → path: merge same-direction points + mark channel crowding (feeds later edges' costs). */
   const outPts: [number, number][] = []
   for (const pt of pts) {
     const n = outPts.length
@@ -177,14 +183,14 @@ export function routeOrthogonal(
   return 'M ' + outPts.map((p) => String(p[0]) + ' ' + String(p[1])).join(' L ')
 }
 
-/** 边路由（handoff/分支/手工链共用）：按用户矩阵选引出/接入候选，逐组合跑 A*。 */
+/** Edge routing (shared by handoff/branch/manual links): picks exit/entry candidates per the user matrix and runs A* per combination. */
 export interface EdgeRouteOptions {
   layout: Layout
   obstacles: Obstacle[]
   occupied: Map<string, number>
   from: string
   to: string
-  /** 同向边序号（防起点/终点重合；j = step % 3 - 1） */
+  /** Same-direction edge index (avoids coinciding start/end; j = step % 3 - 1). */
   step: number
 }
 
@@ -197,15 +203,15 @@ export function routeEdgePath(opts: EdgeRouteOptions): string {
   const fx = colX(layout, from)
   const tx = colX(layout, to)
   const j = (step % 3) - 1
-  /* 引出/接入候选（用户矩阵，覆盖父在子左/右全部组合）：
-   * 侧缘恒取父子相对的面向侧——父在子左 => 父出右缘、子入左缘；
-   * 父在子右 => 父出左缘、子入右缘。
-   * 引出主选 = 外侧边（down 底 / up 顶），次选面向侧缘；
-   * 接入主选 = 面向侧缘，次选外侧边。 */
+  /* Exit/entry candidates (user matrix; covers every parent-left/right combo):
+   * side edges always face the counterpart — parent left of child ⇒ parent
+   * exits right edge, child enters left edge; parent right ⇒ mirrored.
+   * Exit primary = outer edge (bottom for down / top for up), secondary = facing side edge;
+   * entry primary = facing side edge, secondary = outer edge. */
   const childOnRight = tx > fx
   const exitSideX = childOnRight ? fx + NODE_W / 2 + 3 : fx - NODE_W / 2 - 3
   const entrySideX = childOnRight ? tx - NODE_W / 2 - 3 : tx + NODE_W / 2 + 3
-  /* 微扰沿边滑动（j*10/j*6），不垂直推回框内——否则起终点落回障碍内而孤立 */
+  /* Nudges slide along the edge (j*10/j*6), never perpendicular — that would push endpoints back inside the obstacle and strand them. */
   const exitCandidates = [
     { x: fx + j * 10, y: fUp ? fTop - 3 : fTop + NODE_H + 3 },
     { x: exitSideX, y: fTop + NODE_H / 2 + j * 6 },
@@ -219,7 +225,7 @@ export function routeEdgePath(opts: EdgeRouteOptions): string {
     for (const en of entryCandidates) {
       const d = routeOrthogonal(obstacles, ec.x, ec.y, en.x, en.y, occupied)
       if (d === '') continue
-      /* 2 点直连 = A* 判定不可达的兜底；换下一组合 */
+      /* 2-point direct connect = A* deemed unreachable; try the next combo. */
       const segs = (d.match(/L/g) || []).length
       if (segs >= 1) return d
       if (fallback === null) fallback = d

@@ -1,38 +1,38 @@
 /**
- * 会话日志纯解析（无插件依赖，供 host 与单测共用）。
- * 输入 = session.v4.jsonl.zstd 解码后的 JSONL 文本；容忍撕裂/损坏行（跳过）。
+ * Pure session-log parser (no plugin deps; shared by host and unit tests).
+ * Input: decoded JSONL text of session.v4.jsonl.zstd; torn/corrupt lines are skipped.
  */
 
 const TITLE_MARK = '"type":"session/title"'
 const USER_MSG_MARK = '"type":"user/message"'
 const HANDOFF_MARK = '"kind":"skill-invocation","name":"handoff"'
 
-/** 一次 handoff skill 调用明细（按日志顺序）。 */
+/** One handoff skill invocation (in log order). */
 export interface HandoffHit {
-  /** 事件 seq（0 = 日志行缺失/损坏时兜底） */
+  /** Event seq (0 = log line missing/corrupt). */
   seq: number
-  /** 事件 time（epoch ms；0 = 缺失） */
+  /** Event time (epoch ms; 0 = missing). */
   at: number
-  /** 所属轮次（真实用户消息分隔，1 起；开局即调用记第 1 轮） */
+  /** Turn number (real user messages delimit turns, 1-based; calls before the first message count as turn 1). */
   turn: number
 }
 
 export interface ParsedLog {
-  /** header.createdAt（会话对象落盘时刻；仅作回落与展示参考） */
+  /** header.createdAt (session object written time; fallback/display only). */
   createdAt: number
-  /** 首条真实用户消息的 time（会话创建时间口径；0 = 尚无用户消息） */
+  /** Time of the first real user message (creation-time criterion; 0 = none yet). */
   firstUserAt: number
-  /** 日志末事件 time（最后活动） */
+  /** Time of the last log event (last activity). */
   lastAt: number
   parent: string | null
   seeded: boolean
   title: string | null
   cwd: string | null
-  /** 首窗口内调用过 handoff skill（待接前驱紫框判据） */
+  /** Handoff skill ran within the first window (purple "no predecessor" criterion). */
   handoffFirst: boolean
-  /** 消息中出现任意 handoff skill 调用（待接后继金框判据，不限末窗口） */
+  /** Any handoff skill invocation appeared (gold "no successor" criterion; not last-window only). */
   handoffUsed: boolean
-  /** handoff skill 调用明细（每次调用的 seq/time/轮次，按日志顺序） */
+  /** Handoff skill invocations (seq/time/turn each, in log order). */
   handoffHits: HandoffHit[]
 }
 
@@ -53,13 +53,14 @@ export function parseLog(text: string): ParsedLog | null {
     try {
       const ev = JSON.parse(text.slice(lineStart, lineEnd)) as { data?: { title?: unknown } }
       if (typeof ev?.data?.title === 'string' && ev.data.title.trim() !== '') title = ev.data.title
-    } catch { /* 撕裂/损坏行跳过 */ }
+    } catch { /* skip torn/corrupt line */ }
     idx = text.indexOf(TITLE_MARK, idx + TITLE_MARK.length)
   }
 
-  /* 真实用户消息（source.kind=user）扫描：首条 time = 会话创建时间口径。
-   * 注意：不再按首条消息含 "handoff" 字样做任何判定——讨论 handoff 的会话
-   * 会被误标（2026-10-29 用户定夺，「handoff」标签只认 isSeeded ∪ handoffUsed）。 */
+  /* Scan real user messages (source.kind=user); the first time is the
+   * creation-time criterion. Never flag by "handoff" text in the first
+   * message — sessions merely discussing handoff would be mislabeled;
+   * the tag only trusts isSeeded ∪ handoffUsed. */
   const userPos: number[] = []
   let firstUserAt = 0
   let u = text.indexOf(USER_MSG_MARK)
@@ -74,11 +75,12 @@ export function parseLog(text: string): ParsedLog | null {
         userPos.push(u)
         if (firstUserAt === 0 && typeof ev.time === 'number' && ev.time > 0) firstUserAt = ev.time
       }
-    } catch { /* 跳过 */ }
+    } catch { /* skip */ }
     u = text.indexOf(USER_MSG_MARK, u + USER_MSG_MARK.length)
   }
 
-  /* 最后活动时间：从日志末尾向前找第一条可解析且带 time 的事件（容忍撕裂尾行） */
+  /* Last activity: scan backward from the log tail for the first parsable
+   * event carrying a time (tolerates torn trailing lines). */
   let lastAt = typeof hd.createdAt === 'number' ? hd.createdAt : 0
   {
     let pos = text.length
@@ -91,14 +93,15 @@ export function parseLog(text: string): ParsedLog | null {
       try {
         const ev = JSON.parse(raw) as { time?: unknown }
         if (typeof ev.time === 'number' && ev.time > 0) { lastAt = ev.time; break }
-      } catch { /* 撕裂/截断行继续向前 */ }
+      } catch { /* torn/truncated line: keep scanning */ }
     }
   }
 
-  /* handoff skill 调用扫描：逐次解析行取 seq/time；轮次 = 该行之前的真实
-   * 用户消息条数（1 起）。handoffUsed = 出现任意调用（金框判据，不再限于
-   * 末窗口）；handoffFirst = 首窗口内出现（第二条真实用户消息之前，紫框
-   * 判据，口径不变）。非 handoff 的 skill-invocation / 损坏行不计数。 */
+  /* Scan handoff skill invocations for seq/time; turn = number of prior real
+   * user messages (1-based). handoffUsed = any invocation (gold criterion, no
+   * longer last-window only); handoffFirst = within the first window (before
+   * the second real user message; purple criterion). Non-handoff
+   * skill-invocations and corrupt lines don't count. */
   interface Scan { pos: number; hit: HandoffHit }
   const scans: Scan[] = []
   let hh = text.indexOf(HANDOFF_MARK)
@@ -125,7 +128,7 @@ export function parseLog(text: string): ParsedLog | null {
           },
         })
       }
-    } catch { /* 撕裂/损坏行跳过 */ }
+    } catch { /* skip torn/corrupt line */ }
     hh = text.indexOf(HANDOFF_MARK, hh + HANDOFF_MARK.length)
   }
   const firstEnd = userPos.length >= 2 ? userPos[1] : Number.MAX_SAFE_INTEGER

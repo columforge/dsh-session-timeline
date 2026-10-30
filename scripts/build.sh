@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# DSH_CHECKOUT 探测：环境变量 → 常见路径（home 下 dsh-harness）
+# DSH_CHECKOUT probe: env var → common paths (dsh-harness under home)
 CHECKOUT="${DSH_CHECKOUT:-}"
 if [ -z "$CHECKOUT" ]; then
   for candidate in "$HOME/dsh-harness" "$HOME/dsh" "$HOME/.dsh/dsh-harness"; do
@@ -53,9 +53,9 @@ link_pkg cosmokit vendor/cosmokit
 link_pkg schemastery vendor/schemastery
 link_pkg @deepseek-ai/dsh-tools packages/core/tools
 link_pkg @deepseek-ai/dsh-llm packages/llm/llm
-# webServer 服务类型（Context 扩充 + WebRoute 契约），照 hil-panel
+# webServer service types (Context augmentation + WebRoute contract), modeled on hil-panel
 link_pkg @deepseek-ai/dsh-host-webserver packages/host/webserver
-# @types/node（编译类型；checkout 自带）
+# @types/node (compile-time types; the checkout ships them)
 link_pkg @types/node node_modules/@types/node
 
 STD_SCHEMA=$(find "$CHECKOUT/node_modules/.pnpm" -maxdepth 1 -type d -iname '@standard-schema+spec@*' 2>/dev/null | head -1)

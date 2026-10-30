@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { parseLog } from '../lib/parse.js'
 
-/* 构造最小 JSONL 日志：header + 可选 title + 用户消息 + handoff skill 调用行 */
+/* Build a minimal JSONL log: header + optional title + user message + handoff skill invocation lines. */
 const header = (id = 'session-x', extra = {}) =>
   JSON.stringify({ type: 'session', id, createdAt: 1000, ...extra })
 const userMsg = (text, time) =>
@@ -66,7 +66,7 @@ test('多次调用：按日志顺序全量记录，轮次逐一对账', () => {
     handoffCall(4, 4200),
   ]))
   assert.equal(p.handoffUsed, true)
-  /* 开局（无用户消息前）调用记第 1 轮 */
+  /* Invocation before any user message counts as turn 1 */
   assert.deepEqual(p.handoffHits, [
     { seq: 1, at: 1500, turn: 1 },
     { seq: 2, at: 3100, turn: 2 },
@@ -112,7 +112,7 @@ test('原有字段不回归：标题/首用户时间/seed/parent/cwd/末活动',
 })
 
 test('反例回归（2026-10-29 定夺）：首条消息含 handoff 字样不产生任何 handoff 标记', () => {
-  /* 讨论 handoff 的会话（如“…改为 消息中有使用过 handoff skills。”）不得被误标 */
+  /* A session merely discussing handoff must not be mislabeled */
   const p = parseLog(log([header(), userMsg('待接后继标签需要改为 消息中有使用过 handoff skills。', 2000)]))
   assert.equal(p.handoffUsed, false)
   assert.equal(p.handoffFirst, false)

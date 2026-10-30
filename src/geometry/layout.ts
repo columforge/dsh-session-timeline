@@ -1,9 +1,11 @@
 /**
- * 鱼骨 + 深度行布局（纯函数，无 React/DOM 依赖；单测入口）。
+ * Fishbone + depth-row layout (pure functions, no React/DOM deps; unit-test entry).
  *
- * 列 = 传入顺序（UI 按创建/活动时间排好）；side = 独立节点奇偶交替、
- * 血缘子继承父侧；depth = 独立/分支子 0（鱼骨层，鱼刺接轴），handoff 子 =
- * 父 + 1（向轴外侧叠行 = 血缘深度行）。行高 LH = NODE_H + ROW_GAP。
+ * Columns follow input order (UI sorts by creation/activity time); side:
+ * standalone nodes alternate up/down, lineage children inherit the parent's
+ * side; depth: standalone/branch children = 0 (fishbone layer, spur to the
+ * axis), handoff child = parent + 1 (rows stack outward = lineage depth row).
+ * Row height LH = NODE_H + ROW_GAP.
  */
 
 export const SPACING = 140
@@ -13,7 +15,7 @@ export const GAP = 26
 export const ROW_GAP = 16
 export const DATE_BAND = 16
 
-/** 布局只需的节点字段（UI 节点可带更多字段，泛型保留）。 */
+/** Node fields the layout needs (UI nodes may carry more; generics preserved). */
 export interface LayoutNode {
   id: string
   createdAt: number
@@ -51,15 +53,17 @@ export function computeLayout<T extends LayoutNode>(
   const colOf = new Map<string, number>()
   const sideOf = new Map<string, 'up' | 'down'>()
   const depthOf = new Map<string, number>()
-  // 原生血缘（handoff 链与分支）：子会话一律下沉深度行
+  // Native lineage (handoff chains and branches): children always sink a depth row.
   const nativeParent = new Map<string, string>()
   for (const e of edges) nativeParent.set(e.to, e.from)
-  // 手工衔接（from 创建较早 → to 较晚）：to 未被子会话化时同样下沉深度行
+  // Manual links (earlier from → later to): "to" also sinks a depth row.
   const manualParent = new Map<string, string>()
   for (const l of manualLinks) manualParent.set(l.to, l.from)
-  /* 分派（side/depth）按拓扑序：依赖（原生父 / 手工 from）已分派才处理该节点，
-   * 依赖未定则延后到下一轮——手工链的父创建可晚于子（拖拽语义），创建序不可靠；
-   * 同时与显示排序键（lastAt 等）解耦。 */
+  /* Assign side/depth in topological order: process a node only after its
+   * dependency (native parent / manual from) is assigned; otherwise defer to
+   * the next pass — a manual link's "from" may be created later than "to"
+   * (drag semantics), so creation order is unreliable. This also stays
+   * decoupled from the display sort key (lastAt etc.). */
   const byCreation = [...nodesIn].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
   let flip = 0
   let upMax = 0
@@ -77,7 +81,7 @@ export function computeLayout<T extends LayoutNode>(
       let side: 'up' | 'down'
       let depth: number
       if (dep !== undefined) {
-        // 血缘（handoff 链/分支）或手工链：继承父侧，深度 + 1（血缘深度行）
+        // Lineage (handoff chain/branch) or manual link: inherit the parent's side, depth + 1.
         side = sideOf.get(dep) ?? 'up'
         depth = (depthOf.get(dep) ?? 0) + 1
       } else {
@@ -93,7 +97,7 @@ export function computeLayout<T extends LayoutNode>(
       progressed = true
     }
   }
-  // 兜底：仅理论成环才会残留，按独立分派
+  // Fallback: only theoretical cycles remain; assign as standalone.
   for (const n of pending) {
     const side: 'up' | 'down' = flip % 2 === 0 ? 'up' : 'down'
     sideOf.set(n.id, side)
@@ -104,8 +108,9 @@ export function computeLayout<T extends LayoutNode>(
   const upBlock = (upMax + 1) * NODE_H + upMax * ROW_GAP
   const downBlock = (downMax + 1) * NODE_H + downMax * ROW_GAP
   const axisY = DATE_BAND + upBlock + GAP
-  /* 外侧走廊（所有连线的水平通道）：按该侧最外框的实际外缘再外移 12px，
-   * 保证深度行叠高后走廊仍在所有框与鱼刺之外 */
+  /* Outer corridors (horizontal channels for all links): offset 12px beyond
+   * the actual outer edge of the outermost box per side, so they stay clear
+   * of every box and spur even with stacked depth rows. */
   const rowTop = (side: 'up' | 'down', depth: number): number =>
     side === 'up'
       ? axisY - GAP - NODE_H - depth * (NODE_H + ROW_GAP)
@@ -141,7 +146,7 @@ export function nodeTop(layout: Layout, id: string): number {
   const side = layout.sideOf.get(id) ?? 'up'
   const depth = layout.depthOf.get(id) ?? 0
   if (side === 'up') {
-    // 轴上方：depth 0 最靠轴，深度行向上（远离轴）叠
+    // Above the axis: depth 0 sits nearest; deeper rows stack away from the axis.
     return layout.axisY - GAP - NODE_H - depth * (NODE_H + ROW_GAP)
   }
   return layout.axisY + GAP + depth * (NODE_H + ROW_GAP)

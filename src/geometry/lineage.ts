@@ -1,11 +1,14 @@
 /**
- * 血缘链合并语义（纯函数，无 React/DOM 依赖；单测入口）。
+ * Merged lineage-chain semantics (pure functions, no React/DOM deps; unit-test entry).
  *
- * 血缘链 = 原生边（header.parentSession 推导，handoff/分支）∪ 手工衔接
- * （from = 创建较早一方）。凡「链」上的语义——出入度（金紫框判据）、
- * 分支判定（⑂N 徽章、连线显形类别）、详情区血缘/衔接到叙述——一律在
- * 合并链上计算；来源（原生/手工）只影响展示标注（颜色、（手工）字样），
- * 不改变链语义。手工边由 host 按创建时间归一，与原生 parent→child 同向。
+ * A lineage chain = native edges (from header.parentSession; handoff/branch)
+ * ∪ manual links (from = earlier-created side). Everything "chain" semantics
+ * — in/out degrees (gold/purple frame criteria), branch detection (⑂N badge,
+ * link display kind), detail lineage/successor narration — is computed on the
+ * merged chain; the origin (native/manual) only affects display annotation
+ * (color, "(manual)" label), never chain semantics. Manual edges are
+ * normalized by the host to creation order, same direction as native
+ * parent→child.
  */
 
 export interface LineageEdge {
@@ -19,9 +22,9 @@ export interface LineageLink {
 }
 
 export interface LineageDegree {
-  /** 合并入度（原生 + 手工；紫框「待接前驱」判据用） */
+  /** Merged in-degree (native + manual; purple "no predecessor" criterion). */
   in: number
-  /** 合并出度（原生 + 手工；金框「待接后继」判据、⑂N 徽章、分支判定用） */
+  /** Merged out-degree (native + manual; gold "no successor" criterion, ⑂N badge, branch detection). */
   out: number
   nativeIn: number
   manualIn: number
@@ -29,7 +32,7 @@ export interface LineageDegree {
   manualOut: number
 }
 
-/** 合并出入度：原生边与手工边同权计入（一处计算，徽章/框判据/详情共用）。 */
+/** Merged degrees: native and manual edges count equally (computed once; shared by badge/frame criteria/details). */
 export function lineageDegrees(
   edges: LineageEdge[],
   links: LineageLink[],
@@ -62,9 +65,11 @@ export function lineageDegrees(
   return m
 }
 
-/** 连线显形类别：合并出度 ≥ 2 = 分支（扇出，紫实线），否则 = handoff（链式，蓝实线）。
- *  host 的 edges[].kind 保持原生口径（按原生子数分类），展示类别以此推导——
- *  父会话另有手工后继时，原生单子边也按分支显形（链语义合并的结果）。 */
+/** Display kind of a link: merged out-degree ≥ 2 = branch (fan-out, purple solid), else handoff (chained, blue solid).
+ *  The host's edges[].kind keeps the native criterion (by native child count);
+ *  display kind is derived here — when the parent also has a manual successor,
+ *  a native single-child edge displays as a branch (result of merged chain
+ *  semantics). */
 export function displayKind(
   edge: LineageEdge,
   degrees: Map<string, LineageDegree>,

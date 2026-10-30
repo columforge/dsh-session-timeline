@@ -1,16 +1,17 @@
 /**
- * @dsh-external/session-timeline — 会话时间线（右栏页签）。
- * Host 侧：扫描 ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd，
- * 提取 header（createdAt / parentSession / isSeeded / cwd）、首条真实用户消息
- * 时间（会话创建时间口径）、最后一条 session/title 标题、以及 handoff skill
- * 调用明细（user/message + source.kind=skill-invocation + name=handoff；
- * 每次调用的 seq/time/所属轮次，解析逻辑见 ./parse）。
- * 顶层会话（id 带 session- 前缀）作为时间线节点；parentSession 指向桶内
- * 顶层会话构成原生边——父会话单子 = handoff 衔接，多子 = 分支。
- * 手工拖拽衔接按工作区隔离存 ~/.dsh/session-timeline/<bucket>.json。
- * API（/session-timeline/api）：
- *   GET  /workspaces?session=…      工作区清单（桶）
- *   GET  /list?session=…&workspace=…  节点 + 原生边 + 手工衔接
+ * @dsh-external/session-timeline — session timeline (right-panel tab).
+ * Host side: scans ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd
+ * for the header (createdAt / parentSession / isSeeded / cwd), the first real
+ * user message time (creation-time criterion), the last session/title, and
+ * handoff skill invocations (user/message + source.kind=skill-invocation +
+ * name=handoff; seq/time/turn each — parsing in ./parse).
+ * Top-level sessions (session- prefixed id) are timeline nodes; parentSession
+ * pointing at an in-bucket top-level session forms a native edge — one child
+ * = handoff link, multiple children = branch.
+ * Manual drag links are stored per workspace at ~/.dsh/session-timeline/<bucket>.json.
+ * API (/session-timeline/api):
+ *   GET  /workspaces?session=…        workspace list (buckets)
+ *   GET  /list?session=…&workspace=…  nodes + native edges + manual links
  *   POST /link   { session?, workspace?, from, to }
  *   POST /unlink { session?, workspace?, from, to }
  */
@@ -28,7 +29,7 @@ export const name = '@dsh-external/session-timeline'
 export const inject = ['webServer']
 
 export interface Config {
-  /** 手工衔接存储根目录；空 = <DSH_HOME>/session-timeline */
+  /** Manual-link storage root; empty = <DSH_HOME>/session-timeline */
   storage_dir: string
 }
 
@@ -36,51 +37,51 @@ export const Config = z.object({
   storage_dir: z.string().default(''),
 })
 
-/** 时间线节点（顶层会话）。 */
+/** Timeline node (top-level session). */
 export interface SessionNode {
   id: string
   title: string | null
-  /** 会话创建时间 = 首条真实用户消息的 time；尚无用户消息时回落 header.createdAt */
+  /** Creation time = first real user message time; falls back to header.createdAt when none. */
   createdAt: number
-  /** header.createdAt 原文（会话对象落盘时刻，供展示对账） */
+  /** Raw header.createdAt (session object written time; display reconciliation). */
   logCreatedAt: number
-  /** header.parentSession 原文（可能指向桶外/已删除会话） */
+  /** Raw header.parentSession (may point outside the bucket or to a deleted session). */
   parent: string | null
-  /** header.isSeeded：以 handoff 上下文种子开場 */
+  /** header.isSeeded: opened from a handoff context seed. */
   seeded: boolean
   cwd: string | null
-  /** 所属工作区（会话存储桶） */
+  /** Owning workspace (session bucket). */
   bucket: string
-  /** 最后活动时间（日志末事件 time）；时间线定位/显示用它 */
+  /** Last activity (last log event time); used for positioning/display. */
   lastAt: number
-  /** 首个对话内调用过 handoff skill */
+  /** Handoff skill ran in the first conversation window. */
   handoffFirst: boolean
-  /** 消息中出现任意 handoff skill 调用（待接后继金框判据，不限末窗口） */
+  /** Any handoff skill invocation appeared (gold "no successor" criterion; not last-window only). */
   handoffUsed: boolean
-  /** handoff skill 调用明细（seq/time/轮次，按日志顺序） */
+  /** Handoff skill invocations (seq/time/turn, in log order). */
   handoffHits: HandoffHit[]
 }
 
-/** 原生边：handoff（父单子，链式衔接）/ branch（父多子，分叉）。 */
+/** Native edge: handoff (single child, chained) / branch (multiple children). */
 export interface NativeEdge {
   from: string
   to: string
   kind: 'handoff' | 'branch'
 }
 
-/** 手工衔接（from = 创建较早一方，语义“to 衔接自 from”）。 */
+/** Manual link (from = earlier-created side; semantics: "to" links from "from"). */
 export interface ManualLink {
   from: string
   to: string
   created_at: string
 }
 
-/** 工作区（会话存储桶）摘要。 */
+/** Workspace (session bucket) summary. */
 export interface WorkspaceInfo {
   bucket: string
   cwd: string | null
   sessions: number
-  /** 桶内最新会话文件 mtime（epoch ms） */
+  /** Newest session file mtime in the bucket (epoch ms). */
   newest: number
 }
 
@@ -91,10 +92,10 @@ interface Doc {
 
 const SESSION_FILE = 'session.v4.jsonl.zstd'
 const ZSTD_MAGIC = 0xFD2FB528
-/** 全局时间线哨兵桶名（/list?workspace=__global__ 聚合所有工作区）。 */
+/** Sentinel bucket name for the global timeline (/list?workspace=__global__ aggregates all). */
 export const GLOBAL_BUCKET = '__global__'
 
-/* ---- zstd 帧扫描（口径同 harness session-persistence-jsonl，容忍尾部撕裂帧） ---- */
+/* ---- zstd frame scan (same semantics as harness session-persistence-jsonl; tolerates torn trailing frames) ---- */
 
 interface FrameRange { start: number; end: number }
 
@@ -154,7 +155,7 @@ function decompressLog(buffer: Buffer): string | null {
   }
 }
 
-/* ---- 会话桶扫描（mtime+size 缓存） ---- */
+/* ---- Session bucket scan (mtime+size cache) ---- */
 
 interface CacheEntry { mtimeMs: number; size: number; node: SessionNode | null; cwd: string | null }
 
@@ -162,7 +163,7 @@ function dshHomeDir(): string {
   return process.env.DSH_HOME || join(homedir(), '.dsh')
 }
 
-/** 工作区路径 → 会话存储桶同款编码：/a/b → --a-b--（与 decisions-tracker 一致） */
+/** Workspace path → bucket encoding: /a/b → --a-b-- (matches decisions-tracker). */
 export function encodeBucket(workspacePath: string): string {
   const clean = workspacePath.replace(/\/+$/, '').replace(/^\//, '')
   return '--' + clean.replaceAll('/', '-') + '--'
@@ -200,7 +201,8 @@ export function apply(ctx: Context, config: Config): void {
   const sessionsRoot = join(dshHomeDir(), 'sessions')
   mkdirSync(root, { recursive: true })
 
-  /** 会话 → bucket（扫会话存储桶，正例缓存；与 decisions-tracker 同法） */
+
+  /** Session id → bucket (scans session buckets; positive results cached). */
   const bucketCache = new Map<string, string>()
   const sessionBucket = (sessionId: string): string | null => {
     const hit = bucketCache.get(sessionId)
@@ -213,11 +215,11 @@ export function apply(ctx: Context, config: Config): void {
           return ent.name
         }
       }
-    } catch { /* 会话根不可读按未定位处理 */ }
+    } catch { /* unreadable sessions root = unresolved */ }
     return null
   }
 
-  /** 单个会话文件 → 节点/目录信息（mtime+size 缓存）。 */
+  /** One session file → node/dir info (mtime+size cache). */
   const parseCache = new Map<string, CacheEntry>()
   const parseSessionDir = (bucket: string, sid: string): CacheEntry => {
     const file = join(sessionsRoot, bucket, sid, SESSION_FILE)
@@ -252,12 +254,12 @@ export function apply(ctx: Context, config: Config): void {
             : null,
         }
       }
-    } catch { /* 单个会话文件损坏不拖垮整表 */ }
+    } catch { /* one corrupt session file must not break the whole table */ }
     parseCache.set(sid, entry)
     return entry
   }
 
-  /** 桶内节点扫描（只保留顶层会话节点）。 */
+  /** Bucket node scan (top-level session nodes only). */
   const listBucketNodes = (bucket: string): { nodes: SessionNode[]; unreadable: number } => {
     const nodes: SessionNode[] = []
     let unreadable = 0
@@ -273,7 +275,7 @@ export function apply(ctx: Context, config: Config): void {
     return { nodes, unreadable }
   }
 
-  /** 原生边：父单子 = handoff 衔接；父多子 = 分支。 */
+  /** Native edges: one child = handoff link; multiple children = branch. */
   const nativeEdges = (nodes: SessionNode[]): NativeEdge[] => {
     const byId = new Set(nodes.map((n) => n.id))
     const childCount = new Map<string, number>()
@@ -288,7 +290,7 @@ export function apply(ctx: Context, config: Config): void {
     return out
   }
 
-  /** 工作区清单：桶名 + cwd（解析每桶一个会话头，缓存）+ 顶层会话数（= 时间线节点数）+ 最新 mtime。 */
+  /** Workspace list: bucket + cwd (one cached session header per bucket) + top-level session count (= node count) + newest mtime. */
   const listWorkspaces = (): WorkspaceInfo[] => {
     const out: WorkspaceInfo[] = []
     let buckets
@@ -306,11 +308,11 @@ export function apply(ctx: Context, config: Config): void {
       for (const sid of sids) {
         try {
           const st = statSync(join(sessionsRoot, b.name, sid, SESSION_FILE))
-          /* 会话数口径 = 时间线节点口径（仅顶层 session-* 会话；subagent 子会话
-           * 不入线也不计入数量），与 /list 的 sessions.length 对齐 */
+          /* Count = timeline node criterion (top-level session-* only;
+           * subagent child sessions are excluded), aligned with /list sessions.length */
           if (sid.startsWith('session-')) count += 1
           if (st.mtimeMs > newest) newest = st.mtimeMs
-        } catch { /* 无会话文件的目录不计 */ }
+        } catch { /* directories without a session file don't count */ }
       }
       if (count === 0) continue
       let cwd: string | null = null
@@ -324,7 +326,7 @@ export function apply(ctx: Context, config: Config): void {
     return out
   }
 
-  /* ---- 面板 API ---- */
+  /* ---- Panel API ---- */
 
   const json = (res: {
     writeHead: (code: number, headers: Record<string, string>) => unknown
@@ -342,7 +344,7 @@ export function apply(ctx: Context, config: Config): void {
       req.on('error', () => resolve(body))
     })
 
-  /** 定位工作区：workspace 参数（桶名）优先，缺省用 session 参数定位；__global__ = 全桶聚合。 */
+  /** Resolve workspace: workspace param (bucket name) first, else locate via session param; __global__ = all buckets. */
   const locate = (workspace: string | null, sessionId: string | null): { bucket: string; error: null } | { bucket: null; error: string } => {
     if (workspace !== null && workspace.trim() !== '') {
       const bucket = workspace.trim()
@@ -360,7 +362,7 @@ export function apply(ctx: Context, config: Config): void {
     return { bucket, error: null }
   }
 
-  /** 全局聚合：所有桶的节点 + 各桶内血缘边 + 各桶手工衔接（桶内血缘不跨桶）。 */
+  /** Global aggregation: all buckets' nodes + per-bucket lineage edges + manual links (lineage never crosses buckets). */
   const listGlobalNodes = (): { nodes: SessionNode[]; edges: NativeEdge[]; links: ManualLink[]; unreadable: number } => {
     const nodes: SessionNode[] = []
     const edges: NativeEdge[] = []
@@ -371,7 +373,7 @@ export function apply(ctx: Context, config: Config): void {
       buckets = readdirSync(sessionsRoot, { withFileTypes: true })
         .filter((e) => e.isDirectory())
         .map((e) => e.name)
-    } catch { /* 根不可读返回空 */ }
+    } catch { /* unreadable root returns empty */ }
     for (const b of buckets) {
       const r = listBucketNodes(b)
       nodes.push(...r.nodes)
@@ -427,7 +429,7 @@ export function apply(ctx: Context, config: Config): void {
 
       if (pathname === '/session-timeline/api/link' && req.method === 'POST') {
         let body: Record<string, unknown> = {}
-        try { body = JSON.parse(await readBody(req)) as Record<string, unknown> } catch { /* 空体按缺参处理 */ }
+        try { body = JSON.parse(await readBody(req)) as Record<string, unknown> } catch { /* empty body = missing params */ }
         const located = locate(
           typeof body.workspace === 'string' ? body.workspace : null,
           typeof body.session === 'string' ? body.session : null,
@@ -451,9 +453,10 @@ export function apply(ctx: Context, config: Config): void {
             return
           }
         }
-        // 方向按创建时间归一：from = 创建较早一方（时间前驱），
-        // to = 创建较晚一方（后继）——创建时间 = 首条真实用户消息时间，
-        // 尚无用户消息的会话回落 header.createdAt——与原生血缘 parent→child 同向（老指向新）
+        // Normalize direction by creation time: from = earlier side (predecessor),
+        // to = later side (successor); creation time = first real user message
+        // time, falling back to header.createdAt — same direction as native
+        // parent→child (older points to newer).
         const [nf, nt] = a.createdAt <= b.createdAt ? [from, to] : [to, from]
         const doc = loadDoc(root, located.bucket)
         if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }
@@ -468,7 +471,7 @@ export function apply(ctx: Context, config: Config): void {
 
       if (pathname === '/session-timeline/api/unlink' && req.method === 'POST') {
         let body: Record<string, unknown> = {}
-        try { body = JSON.parse(await readBody(req)) as Record<string, unknown> } catch { /* 空体按缺参处理 */ }
+        try { body = JSON.parse(await readBody(req)) as Record<string, unknown> } catch { /* empty body = missing params */ }
         const located = locate(
           typeof body.workspace === 'string' ? body.workspace : null,
           typeof body.session === 'string' ? body.session : null,
@@ -510,7 +513,7 @@ export function apply(ctx: Context, config: Config): void {
           const clip = (t: string): string => t.length > 4000 ? t.slice(0, 4000) + '…（已截断）' : t
           interface Turn { user: string; assistant: string; at: number }
           const turns: Turn[] = []
-          /** handoff skill 调用所在轮（1 起）；同轮多次调用去重 */
+          /** Turns containing a handoff skill call (1-based); same-turn calls deduplicated. */
           const handoffTurnSet = new Set<number>()
           let pos = 0
           for (;;) {
@@ -527,11 +530,13 @@ export function apply(ctx: Context, config: Config): void {
                 } else if (ev?.type === 'user/message'
                   && ev?.data?.source?.kind === 'skill-invocation'
                   && ev?.data?.source?.name === 'handoff') {
-                  /* 调用行属当前已开的轮；开局无用户消息时（turns.length === 0）无对话可展示，跳过 */
+                  /* Call lines belong to the turn already open; with no user
+                   * message yet (turns.length === 0) there is nothing to show — skip. */
                   if (turns.length > 0) handoffTurnSet.add(turns.length)
                 } else if (ev?.type === 'assistant/message' && turns.length > 0) {
-                  // 该轮可能有多次 assistant 输出（工具调用分段）：记录最后一次正式回复；
-                  // 整轮无正式回复时回退最后一次推理
+                  // A turn may have several assistant outputs (tool-call segments):
+                  // keep the last formal reply; fall back to the last reasoning
+                  // when the turn has none.
                   const cur = turns[turns.length - 1]
                   const msg = ev.data as { message?: { content?: { type?: unknown; text?: unknown }[] } } | undefined
                   const blocks = Array.isArray(msg?.message?.content) ? msg.message.content : []
@@ -544,12 +549,12 @@ export function apply(ctx: Context, config: Config): void {
                     if (reasoning !== '') cur.assistant = '[推理] ' + reasoning
                   }
                 }
-              } catch { /* 跳过坏行 */ }
+              } catch { /* skip bad line */ }
             }
             if (nl < 0) break
           }
           if (turns.length === 0) { json(res, 200, { ok: true, turns: 0, handoffTurns: [] }); return }
-          /* 单轮按需取（轮次条点击任意轮）：GET /turns&turn=N → 该轮完整对话 */
+          /* Single turn on demand (clicking any turn bar): GET /turns&turn=N → that turn's dialog. */
           const wantTurn = Number(query.get('turn') ?? '')
           if (Number.isInteger(wantTurn) && wantTurn >= 1 && wantTurn <= turns.length) {
             json(res, 200, { ok: true, turns: turns.length, turn: wantTurn, data: turns[wantTurn - 1] })
@@ -560,7 +565,7 @@ export function apply(ctx: Context, config: Config): void {
             turns: turns.length,
             first: turns[0],
             last: turns[turns.length - 1],
-            /* handoff skill 调用所在轮的完整对话（用户/助手，同款 4000 字截断） */
+            /* Full dialog of handoff-skill turns (user/assistant, same 4000-char clip). */
             handoffTurns: [...handoffTurnSet].sort((a, b) => a - b)
               .filter((turn) => turn >= 1 && turn <= turns.length)
               .map((turn) => ({ turn, ...turns[turn - 1] })),

@@ -1,4 +1,4 @@
-/** 把 "M x y L x y …" 折线解析成点对（路由输出恒为绝对坐标）。 */
+/** Parses an "M x y L x y …" polyline into point pairs (routing output is always absolute coordinates). */
 export function segmentPoints(d) {
   const nums = d.match(/-?\d+(?:\.\d+)?/g) ?? []
   const pts = []
