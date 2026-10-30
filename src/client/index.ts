@@ -322,6 +322,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
    * 同时具备两语义，不再重复显示。 */
   interface TurnView { user: string; assistant: string; at: number }
   interface HandoffTurnView extends TurnView { turn: number }
+  const wheelPageAt = useRef(0)
   const [selTurn, setSelTurn] = useState<number>(1)
   const [turnsData, setTurnsData] = useState<{ turns: number; first?: TurnView; last?: TurnView; handoffTurns?: HandoffTurnView[] } | null>(null)
   const [fetchedTurns, setFetchedTurns] = useState<Map<number, TurnView>>(new Map())
@@ -810,7 +811,17 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           h('div', null,
             '会话按创建时间上下交替分布，链向轴外侧叠深度行；弯折线均从目标左侧进入。选中会话可在详情区查看 handoff 调用的轮次与时间。'))
       : h('div', {
-          title: '点击轮次条切换要查看的轮；内容框内滚轮翻看对话',
+          title: '外框滚轮 = 上一轮/下一轮 · 点轮次条直达 · 内容框内滚轮翻看对话',
+          onWheel: (ev: React.WheelEvent): void => {
+            if (turnsData === null || turnsData.turns === 0) return
+            const now = Date.now()
+            if (now - wheelPageAt.current < 300) return
+            wheelPageAt.current = now
+            const next = ev.deltaY > 0
+              ? Math.min(turnsData.turns, selTurn + 1)
+              : Math.max(1, selTurn - 1)
+            if (next !== selTurn) selectTurn(next)
+          },
           style: {
             flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6,
             border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.25))',

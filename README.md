@@ -58,7 +58,8 @@
   该轮最后一次回复，整轮无正式回复回退 `[推理]`；各截断 4000 字符）。
   **首/末轮横条较大**；**handoff 调用轮金色高亮**（选中轮 = 蓝色填充；末轮即
   handoff 轮时单条同时具备两语义，不再重复显示）。点击任意条查看该轮完整
-  对话（首轮默认选中；对话文本框内滚轮翻看内容）。
+  对话（首轮默认选中；详情外框滚轮 = 上一轮/下一轮，对话文本框内 = 翻看
+  内容）。
   API：`GET /turns?session=<id>&workspace=<桶>` →
   `{ ok, turns, first, last, handoffTurns[{turn,user,assistant,at}] }`；
   `&turn=N` → `{ ok, turns, turn, data }` 单轮按需取。
