@@ -20,8 +20,8 @@
       "name": "@dsh-external/session-timeline",
       "title": { "en": "Session Timeline", "zh": "会话时间线" },
       "description": {
-        "en": "Fishbone timeline of every session in a workspace: native handoff lineage, manual drag links, branch fan-outs; double-click to jump into any session.",
-        "zh": "鱼骨时间线可视化工作区全部会话：原生 handoff 血缘、手工拖拽衔接、分支扇出；双击直达任意会话。"
+        "en": "Fishbone timeline of every session in a workspace: native handoff lineage, manual drag links, branch fan-outs; double-click to jump into any session. Archived sessions shown or hidden; the UI follows the DSH language.",
+        "zh": "鱼骨时间线可视化工作区全部会话：原生 handoff 血缘、手工拖拽衔接、分支扇出；双击直达任意会话。归档会话可显示/隐藏，界面语言跟随 DSH 设置。"
       },
       "author": "columforge",
       "homepage": "https://github.com/columforge/dsh-session-timeline#readme",
@@ -33,6 +33,12 @@
         "sortKeys": {}
       },
       "versions": [
+        {
+          "version": "0.0.28",
+          "publishTimestamp": 1793353450,
+          "source": { "type": "npm" },
+          "engines": {}
+        },
         {
           "version": "0.0.27",
           "publishTimestamp": 0,
