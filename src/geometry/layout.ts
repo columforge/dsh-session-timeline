@@ -6,12 +6,12 @@
  * 父 + 1（向轴外侧叠行 = 血缘深度行）。行高 LH = NODE_H + ROW_GAP。
  */
 
-export const SPACING = 160
+export const SPACING = 140
 export const NODE_W = 132
 export const NODE_H = 96
-export const GAP = 34
-export const ROW_GAP = 24
-export const DATE_BAND = 18
+export const GAP = 26
+export const ROW_GAP = 16
+export const DATE_BAND = 16
 
 /** 布局只需的节点字段（UI 节点可带更多字段，泛型保留）。 */
 export interface LayoutNode {
