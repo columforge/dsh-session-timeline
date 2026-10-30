@@ -4,6 +4,8 @@ English | [中文](README.md)
 
 A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the right sidebar, drawing every session in a workspace onto a fishbone timeline — native handoff lineage, manual drag links, and branch fan-outs in one picture. Double-click any node to jump straight to that session.
 
+![Session timeline overview](docs/images/timeline-overview.png)
+
 ## Features
 
 | Capability | Description |
@@ -62,6 +64,8 @@ Then enter this directory as the local path in "Add plugin".
 - Manual entries carry an inline "unlink" button; changes apply immediately
 
 ### Detail pane
+
+![Detail pane and turn strip](docs/images/timeline-detail.png)
 
 - Selected node shows: title, creation/last-activity times, lineage narrative, link list
 - **Turn strip**: one bar per turn (first/last turns larger, handoff turns gold); click to read the full turn (user message + assistant reply, each truncated to 4000 chars); wheel on the detail frame = previous/next turn
