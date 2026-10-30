@@ -209,6 +209,24 @@ const legendTag = (label: string): unknown =>
     h(P.Tag, { tone: 'info' }, 'handoff'),
     h('span', null, label))
 
+/* 空态图例行：分组标签 + 「操作 = 含义」条目，窄栏自动换行（代替整段墙文） */
+const legendRow = (label: string, items: unknown[]): unknown =>
+  h('div', { key: label, style: { display: 'flex', alignItems: 'flex-start', gap: 8 } },
+    h('span', {
+      style: {
+        flexShrink: 0, fontSize: 10.5, lineHeight: '18px', padding: '0 6px', borderRadius: 4,
+        border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.3))',
+        color: DIM, whiteSpace: 'nowrap',
+      },
+    }, label),
+    h('span', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 12px', minWidth: 0 } }, items))
+/** 一条目：操作词（主题前景色强调）= 含义（继承次级色）。 */
+const legendItem = (action: string, meaning: string): unknown =>
+  h('span', { key: action, style: { display: 'inline-flex', alignItems: 'baseline', gap: 4 } },
+    h('span', { style: { color: AXIS } }, action),
+    h('span', { style: { color: DIM } }, '='),
+    h('span', null, meaning))
+
 /** 渲染错误边界：异常显示错误文本而非空白。 */
 class PanelBoundary extends React.Component<{ children?: unknown }, { error: Error | null }> {
   constructor(props: { children?: unknown }) {
@@ -709,7 +727,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       ),
       h('div', {
         ref: viewportRef,
-        title: '空白处按住拖拽 = 平移 · 滚轮 = 上下滚动（Ctrl+滚轮 = 浏览器缩放）· 画布缩放用左上角 −/+',
+        title: '空白处按住拖拽 = 平移 · 滚轮 = 上下滚动 · 画布缩放用左上角 −/+',
         onPointerDown: onViewportPointerDown,
         style: {
           overflowX: 'auto', overflowY: 'auto',
@@ -845,9 +863,20 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     /* 详情区：未选中 = 操作 + 图例（连线色卡 / 框与标签）+ 布局一句话 */
     sel === undefined
       ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 } },
-          h('div', null,
-            '拖动节点到另一节点 = 手工衔接 · 双击 = 切换会话 · 单击 = 详情 · 空白处拖拽 = 平移。',
-            '滚轮 = 滚动画布（Ctrl+滚轮 = 浏览器缩放）；画布缩放只走左上角 −/+。血缘链 = 原生边 ∪ 手工衔接：⑂N 徽章、分支判定、金紫框、详情血缘叙述均按合并链计算。'),
+          legendRow('操作', [
+            legendItem('拖动节点到另一节点', '手工衔接'),
+            legendItem('双击', '切换会话'),
+            legendItem('单击', '会话详情'),
+            legendItem('空白处拖拽', '平移'),
+          ]),
+          legendRow('画布', [
+            legendItem('滚轮', '滚动画布'),
+            legendItem('缩放', '只走左上角 −/+'),
+          ]),
+          legendRow('血缘链', [
+            h('span', { key: 'def' }, '原生边 ∪ 手工衔接'),
+            legendItem('⑂N 徽章 / 分支判定 / 金紫框 / 详情血缘叙述', '均按合并链计算'),
+          ]),
           h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
             legendLine(ACCENT, false, '链式 handoff（父单子）'),
             legendLine(BRANCH, false, '分支/扇出（父后继 ≥ 2，手工后继计入）'),
