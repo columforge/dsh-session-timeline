@@ -316,15 +316,19 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     return marks
   }, [nodes, layout])
 
-  const wheelPageAt = useRef(0)
-  /* 选中会话的首/末轮 + handoff 调用轮对话（详情区翻页显示，默认首轮） */
+  /* 选中会话的轮次条：横向排列，每轮一根横条（首/末轮较大，handoff 调用轮
+   * 金色高亮）；点击任意条展示该轮对话——首/末/handoff 轮内容随 /turns 附带，
+   * 其余轮按需取 /turns&turn=N（fetchedTurns 缓存）。末轮即 handoff 轮时单条
+   * 同时具备两语义，不再重复显示。 */
   interface TurnView { user: string; assistant: string; at: number }
   interface HandoffTurnView extends TurnView { turn: number }
-  const [turnPage, setTurnPage] = useState<string>('first')
+  const [selTurn, setSelTurn] = useState<number>(1)
   const [turnsData, setTurnsData] = useState<{ turns: number; first?: TurnView; last?: TurnView; handoffTurns?: HandoffTurnView[] } | null>(null)
+  const [fetchedTurns, setFetchedTurns] = useState<Map<number, TurnView>>(new Map())
   useEffect(() => {
     setTurnsData(null)
-    setTurnPage('first')
+    setFetchedTurns(new Map())
+    setSelTurn(1)
     if (selected === null) return
     const q = new URLSearchParams({ session: selected })
     if (workspace !== undefined) q.set('workspace', workspace)
@@ -337,6 +341,36 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       .finally(() => clearTimeout(tid))
     return () => { ctrl.abort() }
   }, [selected, workspace])
+
+  /** 轮 T 的对话内容：首/末/handoff 轮随 /turns 附带；其余取按需缓存 */
+  const turnContent = (turn: number): TurnView | undefined => {
+    if (turnsData === null || turn < 1 || turn > turnsData.turns) return undefined
+    if (turn === 1) return turnsData.first
+    if (turn === turnsData.turns) return turnsData.last
+    const ht = (turnsData.handoffTurns ?? []).find((x) => x.turn === turn)
+    if (ht !== undefined) return ht
+    return fetchedTurns.get(turn)
+  }
+  const fetchTurn = (turn: number): void => {
+    if (selected === null || fetchedTurns.has(turn)) return
+    const q = new URLSearchParams({ session: selected, turn: String(turn) })
+    if (workspace !== undefined) q.set('workspace', workspace)
+    const ctrl = new AbortController()
+    const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    fetch(API_BASE + '/turns?' + q.toString(), { signal: ctrl.signal })
+      .then((r) => r.json() as Promise<{ ok?: boolean; data?: TurnView }>)
+      .then((d) => {
+        if (d?.ok === true && d.data !== undefined) {
+          setFetchedTurns((prev) => { const next = new Map(prev); next.set(turn, d.data as TurnView); return next })
+        }
+      })
+      .catch(() => { /* 保持占位 */ })
+      .finally(() => clearTimeout(tid))
+  }
+  const selectTurn = (turn: number): void => {
+    setSelTurn(turn)
+    if (turnContent(turn) === undefined) fetchTurn(turn)
+  }
 
   /* 血缘链合并出入度（原生 + 手工同权）：金紫框判据、⑂N 徽章、分支显形
    * 判定、详情区血缘/衔接到叙述共用一份（纯函数 lineageDegrees）。 */
@@ -776,13 +810,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           h('div', null,
             '会话按创建时间上下交替分布，链向轴外侧叠深度行；弯折线均从目标左侧进入。选中会话可在详情区查看 handoff 调用的轮次与时间。'))
       : h('div', {
-          title: '滚轮上下滚动切换：首轮 ⇄ 末轮',
-          onWheel: (ev: React.WheelEvent): void => {
-            const now = Date.now()
-            if (now - wheelPageAt.current < 300) return
-            wheelPageAt.current = now
-            setTurnPage(ev.deltaY > 0 ? 'last' : 'first')
-          },
+          title: '点击轮次条切换要查看的轮；内容框内滚轮翻看对话',
           style: {
             flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6,
             border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.25))',
@@ -844,23 +872,39 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             ? h('div', { style: { fontSize: 12 } },
                 '衔接到：' + selOut.map((o) => '「' + titleOf(o.id) + '」' + o.mark).join('、'))
             : null,
-          /* 首/末轮 + handoff 调用轮对话（并排翻页，默认首轮；内容区滚轮上下滑动） */
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            h(P.Button, {
-              variant: turnPage === 'first' ? 'primary' : 'ghost', size: 'sm',
-              onClick: (): void => setTurnPage('first'),
-            }, '首轮对话'),
-            ...(turnsData?.handoffTurns ?? []).map((ht) => h(P.Button, {
-              key: 'handoff-page-' + String(ht.turn),
-              variant: turnPage === 'h' + String(ht.turn) ? 'primary' : 'ghost', size: 'sm',
-              onClick: (): void => setTurnPage('h' + String(ht.turn)),
-            }, 'handoff 第' + String(ht.turn) + '轮')),
-            h(P.Button, {
-              variant: turnPage === 'last' ? 'primary' : 'ghost', size: 'sm',
-              onClick: (): void => setTurnPage('last'),
-            }, '末轮对话'),
-            h('span', { style: { color: DIM, fontSize: 11 } },
-              turnsData === null ? '' : '（共 ' + String(turnsData.turns) + ' 轮；框内滚轮看内容，框外滚轮切页）'),
+          /* 轮次条：横向排列，每轮一根横条；首/末轮较大，handoff 调用轮金色
+           * 高亮（选中蓝色填充 + 金边）；点击任意条展示该轮——末轮即 handoff
+           * 轮时单条同时具备两语义，不再重复显示。 */
+          h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 3, flexWrap: 'wrap' } },
+            ...(turnsData === null
+              ? []
+              : Array.from({ length: turnsData.turns }, (_, i) => i + 1).map((t) => {
+                  const isHandoff = (turnsData.handoffTurns ?? []).some((x) => x.turn === t)
+                  const big = t === 1 || t === turnsData.turns
+                  const active = t === selTurn
+                  return h('div', {
+                    key: 'turn-bar-' + String(t),
+                    title: '第 ' + String(t) + ' 轮' + (t === 1 ? ' · 首轮' : '') + (t === turnsData.turns ? ' · 末轮' : '') + (isHandoff ? ' · handoff 调用轮' : ''),
+                    onClick: () => selectTurn(t),
+                    style: {
+                      width: big ? 24 : 14,
+                      height: big ? 16 : 9,
+                      borderRadius: 3,
+                      cursor: 'pointer',
+                      boxSizing: 'border-box',
+                      background: active ? ACCENT : isHandoff ? LAST_NUDGE : 'var(--dsw-alias-surface-raised, rgba(128,128,128,0.28))',
+                      border: isHandoff ? '1px solid ' + LAST_NUDGE : '1px solid transparent',
+                      opacity: active ? 1 : isHandoff ? 0.8 : 0.7,
+                    },
+                  })
+                })),
+            turnsData !== null && turnsData.turns > 0
+              ? h('span', { style: { color: DIM, fontSize: 11, marginLeft: 6 } },
+                  '第 ' + String(selTurn) + ' / ' + String(turnsData.turns) + ' 轮' +
+                  ((turnsData.handoffTurns ?? []).some((x) => x.turn === selTurn) ? ' · handoff 调用轮' : '') +
+                  (selTurn === 1 ? ' · 首轮' : '') +
+                  (selTurn === turnsData.turns ? ' · 末轮' : ''))
+              : (turnsData !== null ? h('span', { style: { color: DIM, fontSize: 11 } }, '无对话轮') : null),
           ),
           h('div', {
             title: '滚轮上下滑动翻看对话内容',
@@ -875,12 +919,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             turnsData === null
               ? h('span', { style: { color: DIM } }, '加载中…')
               : (() => {
-                  const t = turnPage === 'first'
-                    ? turnsData.first
-                    : turnPage === 'last'
-                      ? turnsData.last
-                      : (turnsData.handoffTurns ?? []).find((x) => 'h' + String(x.turn) === turnPage)
-                  if (t === undefined) return h('span', { style: { color: DIM } }, '无对话内容')
+                  const t = turnContent(selTurn)
+                  if (t === undefined) return h('span', { style: { color: DIM } }, '加载中…')
                   return [
                     h('div', { key: 'u', style: { marginBottom: 6 } },
                       h('span', { style: { color: ACCENT, fontWeight: 600 } }, '用户：'),

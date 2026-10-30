@@ -549,6 +549,12 @@ export function apply(ctx: Context, config: Config): void {
             if (nl < 0) break
           }
           if (turns.length === 0) { json(res, 200, { ok: true, turns: 0, handoffTurns: [] }); return }
+          /* 单轮按需取（轮次条点击任意轮）：GET /turns&turn=N → 该轮完整对话 */
+          const wantTurn = Number(query.get('turn') ?? '')
+          if (Number.isInteger(wantTurn) && wantTurn >= 1 && wantTurn <= turns.length) {
+            json(res, 200, { ok: true, turns: turns.length, turn: wantTurn, data: turns[wantTurn - 1] })
+            return
+          }
           json(res, 200, {
             ok: true,
             turns: turns.length,
