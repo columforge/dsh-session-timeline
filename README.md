@@ -18,6 +18,7 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 | 详情区 + 轮次条 | 点击节点查看会话详情；一排轮次横条翻看完整对话，handoff 调用轮金色高亮 |
 | 工作区切换 | 顶部下拉切换会话桶，「当前会话工作区」自动跟随；页签计数实时显示顶层会话数 |
 | 一键跳转 | 双击节点（或详情区按钮）直接切换到该会话，跨工作区生效 |
+| 界面语言 | 跟随 DSH 设置的语言（中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português）即时切换 |
 
 ## 安装
 
@@ -94,6 +95,8 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 | `GET /turns?session=<id>&workspace=<桶>&turn=N` | 轮次明细（`&turn=N` 单轮按需取） |
 | `POST /link` `{workspace?, session?, from, to}` | 建立手工衔接（按创建时间归一定向，幂等） |
 | `POST /unlink` `{workspace?, session?, from, to}` | 删除手工衔接（双向匹配） |
+
+错误响应统一带 `{ ok: false, error, code, params? }`：`error` 是中文原文（兼容旧客户端/日志），`code` 为稳定机器码，界面按当前语言翻译（如 `workspaceMissing`、`nativeHandoff`、`storageWrite`）。`/turns` 的轮次对象附带 `userClipped` / `assistantClipped` / `assistantReasoning` 标志位，截断与推理标记由前端按语言渲染。
 
 ## 开发
 

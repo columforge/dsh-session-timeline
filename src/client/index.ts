@@ -448,7 +448,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
    * highlighted gold); clicking any bar shows that turn's dialog — first/last/handoff turns ship with /turns,
    * others are fetched on demand (/turns&turn=N, cached in fetchedTurns). When the last turn is itself a
    * handoff turn, one bar carries both meanings and is not shown twice. */
-  interface TurnView { user: string; assistant: string; at: number }
+  /** One turn's dialog; clipped/reasoning markers arrive as flags so the client renders them in the active language. */
+  interface TurnView { user: string; assistant: string; at: number; userClipped?: boolean; assistantClipped?: boolean; assistantReasoning?: boolean }
   interface HandoffTurnView extends TurnView { turn: number }
   const wheelPageAt = useRef(0)
   const [selTurn, setSelTurn] = useState<number>(1)
@@ -774,7 +775,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       h('span', null,
         t('stats.summary', { sessions: nodes.length, handoff: handoffCount, branch: branchCount, manual: manualLinks.length }) +
         ((snap.sessions ?? []).some((n) => n.archived === true)
-          ? ' ' + t('stats.archived', { count: (snap.sessions ?? []).filter((n) => n.archived === true).length })
+          ? ' · ' + t('stats.archived', { count: (snap.sessions ?? []).filter((n) => n.archived === true).length })
           : '') +
         ((snap.unreadable ?? 0) > 0 ? ' ' + t('stats.unreadable', { count: snap.unreadable ?? 0 }) : '')),
       msg !== null ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, msg) : null,
@@ -1091,14 +1092,17 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 3, flexWrap: 'wrap' } },
             ...(turnsData === null
               ? []
-              : Array.from({ length: turnsData.turns }, (_, i) => i + 1).map((t) => {
-                  const isHandoff = (turnsData.handoffTurns ?? []).some((x) => x.turn === t)
-                  const big = t === 1 || t === turnsData.turns
-                  const active = t === selTurn
+              : Array.from({ length: turnsData.turns }, (_, i) => i + 1).map((tn) => {
+                  const isHandoff = (turnsData.handoffTurns ?? []).some((x) => x.turn === tn)
+                  const big = tn === 1 || tn === turnsData.turns
+                  const active = tn === selTurn
                   return h('div', {
-                    key: 'turn-bar-' + String(t),
-                    title: '第 ' + String(t) + ' 轮' + (t === 1 ? ' · 首轮' : '') + (t === turnsData.turns ? ' · 末轮' : '') + (isHandoff ? ' · handoff 调用轮' : ''),
-                    onClick: () => selectTurn(t),
+                    key: 'turn-bar-' + String(tn),
+                    title: t('turns.barTitle', { turn: tn }) +
+                      (tn === 1 ? t('turns.suffixFirst') : '') +
+                      (tn === turnsData.turns ? t('turns.suffixLast') : '') +
+                      (isHandoff ? t('turns.suffixHandoff') : ''),
+                    onClick: () => selectTurn(tn),
                     style: {
                       width: big ? 24 : 14,
                       height: big ? 16 : 9,
@@ -1113,14 +1117,14 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                 })),
             turnsData !== null && turnsData.turns > 0
               ? h('span', { style: { color: DIM, fontSize: 11, marginLeft: 6 } },
-                  '第 ' + String(selTurn) + ' / ' + String(turnsData.turns) + ' 轮' +
-                  ((turnsData.handoffTurns ?? []).some((x) => x.turn === selTurn) ? ' · handoff 调用轮' : '') +
-                  (selTurn === 1 ? ' · 首轮' : '') +
-                  (selTurn === turnsData.turns ? ' · 末轮' : ''))
-              : (turnsData !== null ? h('span', { style: { color: DIM, fontSize: 11 } }, '无对话轮') : null),
+                  t('turns.position', { turn: selTurn, total: turnsData.turns }) +
+                  ((turnsData.handoffTurns ?? []).some((x) => x.turn === selTurn) ? t('turns.suffixHandoff') : '') +
+                  (selTurn === 1 ? t('turns.suffixFirst') : '') +
+                  (selTurn === turnsData.turns ? t('turns.suffixLast') : ''))
+              : (turnsData !== null ? h('span', { style: { color: DIM, fontSize: 11 } }, t('turns.none')) : null),
           ),
           h('div', {
-            title: '滚轮上下滑动翻看对话内容',
+            title: t('turns.contentHint'),
             onWheel: (ev: React.WheelEvent): void => { ev.stopPropagation() },
             style: {
               maxHeight: 180, overflowY: 'auto', fontSize: 12, lineHeight: 1.45,
@@ -1130,17 +1134,24 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             },
           },
             turnsData === null
-              ? h('span', { style: { color: DIM } }, '加载中…')
+              ? h('span', { style: { color: DIM } }, t('state.loading'))
               : (() => {
-                  const t = turnContent(selTurn)
-                  if (t === undefined) return h('span', { style: { color: DIM } }, '加载中…')
+                  const tv = turnContent(selTurn)
+                  if (tv === undefined) return h('span', { style: { color: DIM } }, t('state.loading'))
+                  const userText = tv.user === ''
+                    ? h('span', { style: { color: DIM } }, t('turns.noUserText'))
+                    : tv.user + (tv.userClipped === true ? t('turns.truncated') : '')
+                  const assistantText = tv.assistant === ''
+                    ? h('span', { style: { color: DIM } }, t('turns.noAssistantReply'))
+                    : (tv.assistantReasoning === true ? t('turns.reasoningPrefix') : '') + tv.assistant +
+                      (tv.assistantClipped === true ? t('turns.truncated') : '')
                   return [
                     h('div', { key: 'u', style: { marginBottom: 6 } },
-                      h('span', { style: { color: ACCENT, fontWeight: 600 } }, '用户：'),
-                      t.user === '' ? h('span', { style: { color: DIM } }, '（无文本）') : t.user),
+                      h('span', { style: { color: ACCENT, fontWeight: 600 } }, t('turns.roleUser')),
+                      userText),
                     h('div', { key: 'a' },
-                      h('span', { style: { color: BRANCH, fontWeight: 600 } }, '助手：'),
-                      t.assistant === '' ? h('span', { style: { color: DIM } }, '（本轮暂无助手回复）') : t.assistant),
+                      h('span', { style: { color: BRANCH, fontWeight: 600 } }, t('turns.roleAssistant')),
+                      assistantText),
                   ]
                 })(),
           ),
@@ -1151,8 +1162,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
 /** Tab title: text + top-level session count of the current panel view (light polling).
  *  View = the panel's selected workspace; when unselected it follows the current session's bucket —
  *  switching workspaces applies immediately. */
-function TabTitle(props: { sessionId?: string }): unknown {
+function TabTitle(props: { sessionId?: string; t?: Translate }): unknown {
   const { sessionId } = props
+  const t: Translate = props.t ?? T
   const [count, setCount] = useState(0)
   const [bucket, setBucket] = useState<string | null>(viewBucket.value)
   useEffect(() => subscribeViewBucket(() => setBucket(viewBucket.value)), [])
@@ -1175,53 +1187,58 @@ function TabTitle(props: { sessionId?: string }): unknown {
         .finally(() => clearTimeout(tid))
     }
     tick()
-    const t = setInterval(tick, 12000)
-    return () => clearInterval(t)
+    const iv = setInterval(tick, 12000)
+    return () => clearInterval(iv)
   }, [bucket, sessionId, archMode])
 
-  return h('span', null, T('panel.title') + (count > 0 ? '（' + String(count) + '）' : ''))
+  return h('span', null, t('panel.title') + (count > 0 ? t('fmt.count', { count }) : ''))
 }
 
 export function apply(ctx: Ctx): void {
-  /* Locale wiring: register this namespace's dictionaries and rebind the
-   * module translate so all copy follows the language configured in DSH;
-   * falls back to the zh module dictionary when the service is absent. */
-  if (ctx.locale) {
-    try {
-      ctx.locale.register(NS, dictionaries)
-      T = ctx.locale.bind(NS)
-    } catch { /* keep the zh fallback on any registration failure */ }
+  /* Locale wiring: register this namespace's dictionaries (disposed with the
+   * plugin via ctx.effect) and rebind the module translate so all copy follows
+   * the language configured in DSH; falls back to the zh module dictionary
+   * when the service is absent. */
+  const localeSrv = ctx.locale
+  if (localeSrv !== undefined) {
+    ctx.effect(() => localeSrv.register(NS, dictionaries), 'session-timeline: dictionaries')
+    T = localeSrv.bind(NS)
   }
+  const t: Translate = T
+  /* locale: NS on a slot entry → the renderer synthesizes the t seat into the
+   * component props and re-renders it on locale switch (omitted when the
+   * service is absent: declaring locale requires an installed locale face). */
+  const seat = localeSrv !== undefined ? { locale: NS } : {}
   const openSession = (id: string): void => {
     try {
       ctx.uiWorkspace?.openSession(id)
     } catch { /* silent when the service is missing (only this panel is affected) */ }
   }
-  const Panel = (props: { sessionId?: string }): unknown =>
-    h(PanelBoundary, null, h(PanelBody, { sessionId: props.sessionId, openSession }))
+  const Panel = (props: { sessionId?: string; t?: Translate }): unknown =>
+    h(PanelBoundary, null, h(PanelBody, { sessionId: props.sessionId, openSession, t: props.t ?? T }))
 
   // Part 1: tab type (guide entry card; clicking it = openTab('session-timeline'))
   ctx.effect(() => ctx.sidebarRightTabs.register({
     id: TAB_ID,
     kind: TAB_KIND,
     priority: 'extension',
-    title: () => T('panel.title'),
+    title: () => t('panel.title'),
     guide: [{
       id: 'session-timeline',
       order: 91,
-      title: () => T('panel.title'),
-      description: () => T('guide.description'),
+      title: () => t('panel.title'),
+      description: () => t('guide.description'),
       icon: P.IconBranchOutlineRegular,
     }],
   }), 'session-timeline: tab type')
   // Part 2: tab body (key = definition id)
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register(
-    { name: 'sidebar.right.pane.tab', key: TAB_ID },
+    { name: 'sidebar.right.pane.tab', key: TAB_ID, ...seat },
     Panel,
   )), 'session-timeline: tab body')
   // Part 3: tab title (with this workspace's session count)
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register(
-    { name: 'sidebar.right.pane.tab.title', key: TAB_ID },
+    { name: 'sidebar.right.pane.tab.title', key: TAB_ID, ...seat },
     TabTitle,
   )), 'session-timeline: tab title')
 }

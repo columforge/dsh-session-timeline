@@ -35,4 +35,22 @@ const clientBundle: UserConfig = {
   },
 }
 
-export default [clientBundle] satisfies UserConfig[]
+/* Dictionaries as a standalone ESM module (lib/locales.js): the client bundle
+ * inlines them through its own import, while node:test imports this artifact to
+ * verify key/placeholder parity across the eight languages. ESM because the
+ * package is "type": "module" (a CJS artifact would be misread as ESM). */
+const localesBundle: UserConfig = {
+  entry: { locales: 'src/client/locales.ts' },
+  outDir: 'lib',
+  format: 'esm',
+  platform: 'neutral',
+  dts: false,
+  sourcemap: false,
+  clean: false,
+  outputOptions: {
+    entryFileNames: 'locales.js',
+    codeSplitting: false,
+  },
+}
+
+export default [clientBundle, localesBundle] satisfies UserConfig[]

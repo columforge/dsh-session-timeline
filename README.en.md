@@ -18,6 +18,7 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 | Detail pane + turn strip | Click a node for details; a strip of turn bars pages through the full conversation with handoff turns highlighted in gold |
 | Workspace switch | Header dropdown switches session buckets; "current session workspace" auto-follows; tab shows the live top-level session count |
 | One-click jump | Double-click a node (or the detail button) to open that session, across workspaces |
+| UI language | Follows the language configured in DSH (中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português), switching live |
 
 ## Installation
 
@@ -94,6 +95,8 @@ Then enter this directory as the local path in "Add plugin".
 | `GET /turns?session=<id>&workspace=<bucket>&turn=N` | Turn details (`&turn=N` fetches a single turn) |
 | `POST /link` `{workspace?, session?, from, to}` | Create a manual link (direction normalized by creation time, idempotent) |
 | `POST /unlink` `{workspace?, session?, from, to}` | Remove a manual link (matched both ways) |
+
+Error responses carry `{ ok: false, error, code, params? }`: `error` keeps the Chinese text (old clients/logs), while `code` is a stable machine id the UI translates into the configured language (e.g. `workspaceMissing`, `nativeHandoff`, `storageWrite`). `/turns` entries add `userClipped` / `assistantClipped` / `assistantReasoning` flags; the clip/reasoning markers render client-side in that language.
 
 ## Development
 

@@ -14,6 +14,10 @@
  *   GET  /list?session=…&workspace=…  nodes (+archived flag) + native edges + manual links
  *   POST /link   { session?, workspace?, from, to }
  *   POST /unlink { session?, workspace?, from, to }
+ * Error responses carry { ok:false, error:<zh text>, code, params? }: `code` is
+ * stable and rendered client-side in the language configured in DSH; /turns
+ * entries add userClipped / assistantClipped / assistantReasoning flags so
+ * the clip/reasoning markers localize with the rest of the copy.
  * Archive state: the workspace registry's global archive set
  * (ctx 'workspaceRegistry' service when present, else the durable
  * ~/.dsh/storages/workspace.json global.archivedSessionIds) is stamped onto
@@ -176,19 +180,23 @@ export function encodeBucket(workspacePath: string): string {
   return '--' + clean.replaceAll('/', '-') + '--'
 }
 
-function loadDoc(root: string, bucket: string): { doc: Doc; error: string | null } {
+/** One API failure: stable machine code (+ interpolation params) for client-side i18n,
+ *  plus the human-readable Chinese text kept for old clients and logs. */
+interface ApiFail { code: string; text: string; params?: Record<string, unknown> }
+
+function loadDoc(root: string, bucket: string): { doc: Doc; fail: ApiFail | null } {
   try {
     const file = join(root, bucket + '.json')
-    if (!existsSync(file)) return { doc: { version: 1, links: [] }, error: null }
+    if (!existsSync(file)) return { doc: { version: 1, links: [] }, fail: null }
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<Doc>
-    if (!Array.isArray(parsed.links)) return { doc: { version: 1, links: [] }, error: '存储文件 links 字段缺失，已按空账处理' }
-    return { doc: { version: 1, links: parsed.links as ManualLink[] }, error: null }
+    if (!Array.isArray(parsed.links)) return { doc: { version: 1, links: [] }, fail: { code: 'storageRead', text: '存储文件 links 字段缺失，已按空账处理' } }
+    return { doc: { version: 1, links: parsed.links as ManualLink[] }, fail: null }
   } catch (e) {
-    return { doc: { version: 1, links: [] }, error: '存储文件读取失败：' + String(e).slice(0, 120) }
+    return { doc: { version: 1, links: [] }, fail: { code: 'storageRead', text: '存储文件读取失败：' + String(e).slice(0, 120), params: { message: String(e).slice(0, 120) } } }
   }
 }
 
-function saveDoc(root: string, bucket: string, doc: Doc): string | null {
+function saveDoc(root: string, bucket: string, doc: Doc): ApiFail | null {
   try {
     mkdirSync(root, { recursive: true })
     const file = join(root, bucket + '.json')
@@ -197,7 +205,7 @@ function saveDoc(root: string, bucket: string, doc: Doc): string | null {
     renameSync(tmp, file)
     return null
   } catch (e) {
-    return '存储文件写入失败：' + String(e).slice(0, 120)
+    return { code: 'storageWrite', text: '存储文件写入失败：' + String(e).slice(0, 120), params: { message: String(e).slice(0, 120) } }
   }
 }
 
@@ -375,6 +383,14 @@ export function apply(ctx: Context, config: Config): void {
     res.end(JSON.stringify(payload))
   }
 
+  /** Error payload: `code`/`params` drive the client's localized copy; `error` keeps the zh text. */
+  const failPayload = (f: ApiFail): Record<string, unknown> => ({
+    ok: false,
+    error: f.text,
+    code: f.code,
+    ...(f.params !== undefined ? { params: f.params } : {}),
+  })
+
   const readBody = (req: { on: (ev: string, cb: (chunk: unknown) => void) => void }): Promise<string> =>
     new Promise((resolve) => {
       let body = ''
@@ -384,21 +400,21 @@ export function apply(ctx: Context, config: Config): void {
     })
 
   /** Resolve workspace: workspace param (bucket name) first, else locate via session param; __global__ = all buckets. */
-  const locate = (workspace: string | null, sessionId: string | null): { bucket: string; error: null } | { bucket: null; error: string } => {
+  const locate = (workspace: string | null, sessionId: string | null): { bucket: string; fail: null } | { bucket: null; fail: ApiFail } => {
     if (workspace !== null && workspace.trim() !== '') {
       const bucket = workspace.trim()
-      if (bucket === GLOBAL_BUCKET) return { bucket, error: null }
+      if (bucket === GLOBAL_BUCKET) return { bucket, fail: null }
       if (!existsSync(join(sessionsRoot, bucket))) {
-        return { bucket: null, error: '工作区 ' + bucket + ' 不存在（桶不可读）' }
+        return { bucket: null, fail: { code: 'workspaceMissing', text: '工作区 ' + bucket + ' 不存在（桶不可读）', params: { bucket } } }
       }
-      return { bucket, error: null }
+      return { bucket, fail: null }
     }
     if (sessionId === null || sessionId.trim() === '') {
-      return { bucket: null, error: '缺 session/workspace 参数' }
+      return { bucket: null, fail: { code: 'locateMissing', text: '缺 session/workspace 参数' } }
     }
     const bucket = sessionBucket(sessionId.trim())
-    if (bucket === null) return { bucket: null, error: '会话 ' + sessionId + ' 不在任何工作区存储桶' }
-    return { bucket, error: null }
+    if (bucket === null) return { bucket: null, fail: { code: 'sessionNotInBucket', text: '会话 ' + sessionId + ' 不在任何工作区存储桶', params: { session: sessionId } } }
+    return { bucket, fail: null }
   }
 
   /** Global aggregation: all buckets' nodes + per-bucket lineage edges + manual links (lineage never crosses buckets). */
@@ -419,7 +435,7 @@ export function apply(ctx: Context, config: Config): void {
       unreadable += r.unreadable
       edges.push(...nativeEdges(r.nodes))
       const doc = loadDoc(root, b)
-      if (doc.error === null) links.push(...doc.doc.links)
+      if (doc.fail === null) links.push(...doc.doc.links)
     }
     nodes.sort((a, b2) => a.lastAt - b2.lastAt)
     return { nodes, edges, links, unreadable }
@@ -439,7 +455,7 @@ export function apply(ctx: Context, config: Config): void {
 
       if (pathname === '/session-timeline/api/list' && req.method === 'GET') {
         const located = locate(query.get('workspace'), query.get('session'))
-        if (located.error !== null) { json(res, 400, { ok: false, error: located.error }); return }
+        if (located.fail !== null) { json(res, 400, failPayload(located.fail)); return }
         if (located.bucket === GLOBAL_BUCKET) {
           const g = listGlobalNodes()
           json(res, 200, {
@@ -454,7 +470,7 @@ export function apply(ctx: Context, config: Config): void {
         }
         const { nodes, unreadable } = listBucketNodes(located.bucket)
         const doc = loadDoc(root, located.bucket)
-        if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }
+        if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         json(res, 200, {
           ok: true,
           bucket: located.bucket,
@@ -473,22 +489,24 @@ export function apply(ctx: Context, config: Config): void {
           typeof body.workspace === 'string' ? body.workspace : null,
           typeof body.session === 'string' ? body.session : null,
         )
-        if (located.error !== null) { json(res, 400, { ok: false, error: located.error }); return }
+        if (located.fail !== null) { json(res, 400, failPayload(located.fail)); return }
         const from = typeof body.from === 'string' ? body.from.trim() : ''
         const to = typeof body.to === 'string' ? body.to.trim() : ''
-        if (from === '' || to === '') { json(res, 400, { ok: false, error: 'from/to 不能为空' }); return }
-        if (from === to) { json(res, 400, { ok: false, error: '不能与自己衔接' }); return }
+        if (from === '' || to === '') { json(res, 400, failPayload({ code: 'emptyFromTo', text: 'from/to 不能为空' })); return }
+        if (from === to) { json(res, 400, failPayload({ code: 'linkSelf', text: '不能与自己衔接' })); return }
         const { nodes } = listBucketNodes(located.bucket)
         const byId = new Map(nodes.map((n) => [n.id, n]))
         const a = byId.get(from)
         const b = byId.get(to)
         if (a === undefined || b === undefined) {
-          json(res, 400, { ok: false, error: 'from/to 必须是该工作区的顶层会话' })
+          json(res, 400, failPayload({ code: 'notTopLevel', text: 'from/to 必须是该工作区的顶层会话' }))
           return
         }
         for (const e of nativeEdges(nodes)) {
           if ((e.from === from && e.to === to) || (e.from === to && e.to === from)) {
-            json(res, 409, { ok: false, error: '两会话已存在原生血缘（' + (e.kind === 'branch' ? '分支' : 'handoff') + '），无需手工连线' })
+            json(res, 409, e.kind === 'branch'
+              ? failPayload({ code: 'nativeBranch', text: '两会话已存在原生血缘（分支），无需手工连线' })
+              : failPayload({ code: 'nativeHandoff', text: '两会话已存在原生血缘（handoff），无需手工连线' }))
             return
           }
         }
@@ -498,12 +516,12 @@ export function apply(ctx: Context, config: Config): void {
         // parent→child (older points to newer).
         const [nf, nt] = a.createdAt <= b.createdAt ? [from, to] : [to, from]
         const doc = loadDoc(root, located.bucket)
-        if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }
+        if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         const dup = doc.doc.links.some((l) => (l.from === nf && l.to === nt) || (l.from === nt && l.to === nf))
         if (dup) { json(res, 200, { ok: true, duplicate: true }); return }
         doc.doc.links.push({ from: nf, to: nt, created_at: new Date().toISOString() })
         const err = saveDoc(root, located.bucket, doc.doc)
-        if (err !== null) { json(res, 500, { ok: false, error: err }); return }
+        if (err !== null) { json(res, 500, failPayload(err)); return }
         json(res, 200, { ok: true, from: nf, to: nt })
         return
       }
@@ -515,18 +533,18 @@ export function apply(ctx: Context, config: Config): void {
           typeof body.workspace === 'string' ? body.workspace : null,
           typeof body.session === 'string' ? body.session : null,
         )
-        if (located.error !== null) { json(res, 400, { ok: false, error: located.error }); return }
+        if (located.fail !== null) { json(res, 400, failPayload(located.fail)); return }
         const from = typeof body.from === 'string' ? body.from.trim() : ''
         const to = typeof body.to === 'string' ? body.to.trim() : ''
-        if (from === '' || to === '') { json(res, 400, { ok: false, error: 'from/to 不能为空' }); return }
+        if (from === '' || to === '') { json(res, 400, failPayload({ code: 'emptyFromTo', text: 'from/to 不能为空' })); return }
         const doc = loadDoc(root, located.bucket)
-        if (doc.error !== null) { json(res, 500, { ok: false, error: doc.error }); return }
+        if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         const before = doc.doc.links.length
         doc.doc.links = doc.doc.links.filter((l) => !((l.from === from && l.to === to) || (l.from === to && l.to === from)))
         const removed = before - doc.doc.links.length
         if (removed > 0) {
           const err = saveDoc(root, located.bucket, doc.doc)
-          if (err !== null) { json(res, 500, { ok: false, error: err }); return }
+          if (err !== null) { json(res, 500, failPayload(err)); return }
         }
         json(res, 200, { ok: true, removed })
         return
@@ -543,14 +561,25 @@ export function apply(ctx: Context, config: Config): void {
           if (bucket !== null) dir = join(sessionsRoot, bucket, sid)
         }
         if (dir === null || !existsSync(join(dir, SESSION_FILE))) {
-          json(res, 404, { ok: false, error: '会话 ' + sid + ' 不存在' })
+          json(res, 404, failPayload({ code: 'sessionMissing', text: '会话 ' + sid + ' 不存在', params: { session: sid } }))
           return
         }
         try {
           const text = decompressLog(readFileSync(join(dir, SESSION_FILE)))
-          if (text === null) { json(res, 500, { ok: false, error: '会话日志解码失败' }); return }
-          const clip = (t: string): string => t.length > 4000 ? t.slice(0, 4000) + '…（已截断）' : t
-          interface Turn { user: string; assistant: string; at: number }
+          if (text === null) { json(res, 500, failPayload({ code: 'decodeFailed', text: '会话日志解码失败' })); return }
+          /** 4000-char clip; the truncation marker is rendered client-side from the
+           *  clipped flag so it follows the configured language. */
+          const clip = (t: string): { text: string; clipped: boolean } => t.length > 4000
+            ? { text: t.slice(0, 4000), clipped: true }
+            : { text: t, clipped: false }
+          interface Turn {
+            user: string
+            assistant: string
+            at: number
+            userClipped?: boolean
+            assistantClipped?: boolean
+            assistantReasoning?: boolean
+          }
           const turns: Turn[] = []
           /** Turns containing a handoff skill call (1-based); same-turn calls deduplicated. */
           const handoffTurnSet = new Set<number>()
@@ -565,7 +594,8 @@ export function apply(ctx: Context, config: Config): void {
                 const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown; name?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
                 if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user' && Array.isArray(ev.data.content)) {
                   const t = ev.data.content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => String(c.text)).join('\n')
-                  turns.push({ user: clip(t), assistant: '', at: typeof ev.time === 'number' ? ev.time : 0 })
+                  const clipped = clip(t)
+                  turns.push({ user: clipped.text, userClipped: clipped.clipped, assistant: '', at: typeof ev.time === 'number' ? ev.time : 0 })
                 } else if (ev?.type === 'user/message'
                   && ev?.data?.source?.kind === 'skill-invocation'
                   && ev?.data?.source?.name === 'handoff') {
@@ -581,11 +611,17 @@ export function apply(ctx: Context, config: Config): void {
                   const blocks = Array.isArray(msg?.message?.content) ? msg.message.content : []
                   const text = blocks.filter((c) => c?.type === 'text' && typeof c.text === 'string')
                     .map((c) => String(c.text)).join('\n').trim()
-                  if (text !== '') cur.assistant = clip(text)
-                  else if (cur.assistant === '') {
+                  if (text !== '') {
+                    const clipped = clip(text)
+                    cur.assistant = clipped.text
+                    cur.assistantClipped = clipped.clipped
+                  } else if (cur.assistant === '') {
                     const reasoning = blocks.filter((c) => c?.type === 'reasoning' && typeof c.text === 'string')
                       .map((c) => String(c.text)).join('\n').trim()
-                    if (reasoning !== '') cur.assistant = '[推理] ' + reasoning
+                    if (reasoning !== '') {
+                      cur.assistant = reasoning
+                      cur.assistantReasoning = true
+                    }
                   }
                 }
               } catch { /* skip bad line */ }
@@ -610,12 +646,12 @@ export function apply(ctx: Context, config: Config): void {
               .map((turn) => ({ turn, ...turns[turn - 1] })),
           })
         } catch (e) {
-          json(res, 500, { ok: false, error: '解析失败：' + String(e).slice(0, 120) })
+          json(res, 500, failPayload({ code: 'parseFailed', text: '解析失败：' + String(e).slice(0, 120), params: { message: String(e).slice(0, 120) } }))
         }
         return
       }
 
-      json(res, 404, { ok: false, error: '未知端点 ' + req.method + ' ' + pathname })
+      json(res, 404, failPayload({ code: 'unknownEndpoint', text: '未知端点 ' + req.method + ' ' + pathname, params: { method: req.method ?? '', path: pathname } }))
     },
   } satisfies WebRoute), 'session-timeline: api')
 
