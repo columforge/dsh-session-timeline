@@ -192,6 +192,20 @@ function shortId(id: string): string {
   return id.startsWith('session-') ? id.slice(8, 8 + 8) + '…' : id.slice(0, 8) + '…'
 }
 
+/* 空态图例小件：连线色卡（实/虚）、框色卡、标签徽章 */
+const legendLine = (color: string, dashed: boolean, label: string): unknown =>
+  h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+    h('span', { style: { display: 'inline-block', width: 22, height: 0, borderTop: '2px ' + (dashed ? 'dashed ' : 'solid ') + color } }),
+    h('span', null, label))
+const legendFrame = (color: string, label: string): unknown =>
+  h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+    h('span', { style: { display: 'inline-block', width: 11, height: 11, borderRadius: 3, border: '2px solid ' + color, boxSizing: 'border-box' } }),
+    h('span', null, label))
+const legendTag = (label: string): unknown =>
+  h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+    h(P.Tag, { tone: 'info' }, 'handoff'),
+    h('span', null, label))
+
 /** 渲染错误边界：异常显示错误文本而非空白。 */
 class PanelBoundary extends React.Component<{ children?: unknown }, { error: Error | null }> {
   constructor(props: { children?: unknown }) {
@@ -745,10 +759,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         ),
       ),
     ),
-    /* 详情区：选中节点 */
+    /* 详情区：未选中 = 操作 + 图例（连线色卡 / 框与标签）+ 布局一句话 */
     sel === undefined
-      ? h('div', { style: { color: DIM, fontSize: 12 } },
-          '会话按创建时间分布在时间轴上下（handoff 链向轴外侧叠深度行）；拖动节点到另一节点建立手工衔接；双击切换到该会话。血缘链 = 原生边 + 手工衔接：⑂N 徽章、分支判定、金紫框出入度、详情血缘叙述均按合并链计算。弯折线：蓝 = 链式 handoff、紫 = 分支/扇出（父另有手工后继时原生边也显形为分支）、虚线橙 = 手工衔接（均从左侧进入目标）。紫框 = 首对话调用过 handoff 且无前驱；金框 = 消息中出现过 handoff skill 调用且无后继；选中会话可在详情区查看每次调用的轮次与时间；handoff 标签 = 首条消息含 handoff 文档。')
+      ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 } },
+          h('div', null,
+            '拖动节点到另一节点 = 手工衔接 · 双击 = 切换会话 · 单击 = 详情。',
+            '血缘链 = 原生边 ∪ 手工衔接：⑂N 徽章、分支判定、金紫框、详情血缘叙述均按合并链计算。'),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
+            legendLine(ACCENT, false, '链式 handoff（父单子）'),
+            legendLine(BRANCH, false, '分支/扇出（父后继 ≥ 2，手工后继计入）'),
+            legendLine(MANUAL, true, '手工衔接（host 按创建时间定向）')),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
+            legendFrame(FIRST_NUDGE, '待接前驱：首对话调用过 handoff 且无前驱'),
+            legendFrame(LAST_NUDGE, '待接后继：出现过 handoff 调用且无后继'),
+            legendTag('调用过 handoff skill 或以 handoff 种子开场')),
+          h('div', null,
+            '会话按创建时间上下交替分布，链向轴外侧叠深度行；弯折线均从目标左侧进入。选中会话可在详情区查看 handoff 调用的轮次与时间。'))
       : h('div', {
           title: '滚轮上下滚动切换：首轮 ⇄ 末轮',
           onWheel: (ev: React.WheelEvent): void => {
