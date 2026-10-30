@@ -23,11 +23,11 @@ Prerequisite: DSH (DeepSeek Harness) installed and running.
 Open the DSH **Plugins page → Add plugin**, then use any of:
 
 1. **npm package name** (recommended, once published): `@dsh-external/session-timeline` — see [Distribution](#distribution)
-2. **Release tarball** (works today): download the `.tgz` from [GitHub Releases](https://github.com/ColumKam/dsh-session-timeline/releases), extract it, and enter the extracted directory as a **local path**
+2. **Release tarball** (works today): download the `.tgz` from [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases), extract it, and enter the extracted directory as a **local path**
 3. **Build from source** (developers):
 
 ```bash
-git clone https://github.com/ColumKam/dsh-session-timeline.git
+git clone https://github.com/columforge/dsh-session-timeline.git
 cd dsh-session-timeline
 npm run build        # needs DSH_CHECKOUT pointing at a DSH source checkout (see below)
 ```

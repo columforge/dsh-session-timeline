@@ -6,11 +6,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ColumKam/dsh-session-timeline.git"
+    "url": "git+https://github.com/columforge/dsh-session-timeline.git"
   },
-  "homepage": "https://github.com/ColumKam/dsh-session-timeline#readme",
+  "homepage": "https://github.com/columforge/dsh-session-timeline#readme",
   "bugs": {
-    "url": "https://github.com/ColumKam/dsh-session-timeline/issues"
+    "url": "https://github.com/columforge/dsh-session-timeline/issues"
   },
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",

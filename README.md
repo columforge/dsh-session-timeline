@@ -23,11 +23,11 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 打开 DSH 的**插件页 → 添加插件**，按下列任一方式安装：
 
 1. **npm 包名**（推荐，待发布）：填 `@dsh-external/session-timeline`（npm 发布后可用，见 [发布渠道](#发布渠道)）
-2. **Release 压缩包**（立即可用）：从 [GitHub Releases](https://github.com/ColumKam/dsh-session-timeline/releases) 下载 `.tgz`，解压后填入**解压目录的本地路径**
+2. **Release 压缩包**（立即可用）：从 [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases) 下载 `.tgz`，解压后填入**解压目录的本地路径**
 3. **源码构建**（开发者）：
 
 ```bash
-git clone https://github.com/ColumKam/dsh-session-timeline.git
+git clone https://github.com/columforge/dsh-session-timeline.git
 cd dsh-session-timeline
 npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 ```
