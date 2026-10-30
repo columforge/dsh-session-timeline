@@ -811,7 +811,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             legendFrame(LAST_NUDGE, '待接后继：出现过 handoff 调用且无后继'),
             legendTag('调用过 handoff skill 或以 handoff 种子开场')),
           h('div', null,
-            '会话按创建时间上下交替分布，链向轴外侧叠深度行；弯折线均从目标左侧进入。选中会话可在详情区查看 handoff 调用的轮次与时间。'))
+            '选中会话可在详情区查看 handoff 调用的轮次与时间。'))
       : h('div', {
           title: '外框滚轮 = 上一轮/下一轮 · 点轮次条直达 · 内容框内滚轮翻看对话',
           onWheel: (ev: React.WheelEvent): void => {
