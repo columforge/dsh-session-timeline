@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "title": {
+    "en": "ColumKam's DSH plugins",
+    "zh": "ColumKam 的 DSH 插件"
+  },
+  "description": {
+    "en": "Third-party plugins for DeepSeek Harness by ColumKam.",
+    "zh": "ColumKam 的 DeepSeek Harness 第三方插件索引。"
+  },
+  "metadata": {
+    "categories": {
+      "visualization": { "title": { "en": "Visualization", "zh": "可视化" } }
+    },
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "@dsh-external/session-timeline",
+      "title": { "en": "Session Timeline", "zh": "会话时间线" },
+      "description": {
+        "en": "Fishbone timeline of every session in a workspace: native handoff lineage, manual drag links, branch fan-outs; double-click to jump into any session.",
+        "zh": "鱼骨时间线可视化工作区全部会话：原生 handoff 血缘、手工拖拽衔接、分支扇出；双击直达任意会话。"
+      },
+      "author": "ColumKam",
+      "homepage": "https://github.com/ColumKam/dsh-session-timeline#readme",
+      "repository": { "url": "https://github.com/ColumKam/dsh-session-timeline" },
+      "metadata": {
+        "category": "visualization",
+        "keywords": ["timeline", "handoff", "lineage", "visualization"],
+        "labels": [],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.0.27",
+          "publishTimestamp": 0,
+          "source": { "type": "npm" },
+          "engines": {}
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,14 @@
   "description": "会话时间线（右栏页签）：按创建时间从左到右排布本工作区会话，原生 handoff 血缘 + 手工拖拽衔接",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ColumKam/dsh-session-timeline.git"
+  },
+  "homepage": "https://github.com/ColumKam/dsh-session-timeline#readme",
+  "bugs": {
+    "url": "https://github.com/ColumKam/dsh-session-timeline/issues"
+  },
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
