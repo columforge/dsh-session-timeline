@@ -14,6 +14,7 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 | Lineage visualization | Blue solid = handoff chain (single child), purple solid = branch fan-out (parent shows a `⑂N` badge), dashed orange = manual link |
 | Manual links | Drag between nodes to record "this session continued from that one"; semantics merge with native lineage |
 | Handoff hints | Purple frame = used the handoff skill, no predecessor (awaiting one); gold frame = any handoff invocation, no successor (awaiting one) |
+| Archived sessions | Header display switch: **show all sessions** (default; archived boxes dashed with an "Archived" tag) / **hide archived sessions** |
 | Detail pane + turn strip | Click a node for details; a strip of turn bars pages through the full conversation with handoff turns highlighted in gold |
 | Workspace switch | Header dropdown switches session buckets; "current session workspace" auto-follows; tab shows the live top-level session count |
 | One-click jump | Double-click a node (or the detail button) to open that session, across workspaces |
@@ -54,6 +55,12 @@ Then enter this directory as the local path in "Add plugin".
 - Sort key dropdown: **by creation time (default) / by last activity**
 - Direction: **newest-first (default) / oldest-first**; newest-first puts the spine arrow on the left
 
+### Archived sessions
+
+- Header dropdown: **show all sessions (default) / hide archived sessions**; archive state comes from the workspace registry's global archive set (what the DSH sidebar "archive" action writes)
+- Show-all mode draws archived session boxes with **dashed borders** plus an "Archived" tag and marks them in the detail pane; hide mode removes them from the timeline (edges touching them drop out too)
+- Header stats append an archived count when present; the tab-title count follows the selected mode
+
 ### Lineage chains
 
 - **Nodes** = top-level sessions of the workspace (`session-` prefix; subagent sessions excluded)
@@ -74,6 +81,7 @@ Then enter this directory as the local path in "Add plugin".
 ## Data and privacy
 
 - **Read-only** scan of `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd` (header, title, first-user-message time, last-event time, handoff invocation details; zstd multi-frame decode with mtime/size caching)
+- Archive state is **read-only** too: the workspace registry's archive set (service mirror, falling back to `~/.dsh/storages/workspace.json` `global.archivedSessionIds`)
 - **The only write**: manual links go to `~/.dsh/session-timeline/<bucket>.json` (isolated per workspace)
 - Nothing is uploaded; session storage is never modified
 
@@ -82,7 +90,7 @@ Then enter this directory as the local path in "Add plugin".
 | Endpoint | Description |
 |---|---|
 | `GET /workspaces` | Workspace list `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
-| `GET /list?workspace=<bucket\|__global__>&session=<id>` | Nodes + native edges + manual links |
+| `GET /list?workspace=<bucket\|__global__>&session=<id>` | Nodes (+ `archived` flag) + native edges + manual links |
 | `GET /turns?session=<id>&workspace=<bucket>&turn=N` | Turn details (`&turn=N` fetches a single turn) |
 | `POST /link` `{workspace?, session?, from, to}` | Create a manual link (direction normalized by creation time, idempotent) |
 | `POST /unlink` `{workspace?, session?, from, to}` | Remove a manual link (matched both ways) |

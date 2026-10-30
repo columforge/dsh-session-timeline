@@ -14,6 +14,7 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 | 血缘可视化 | 蓝实线 = handoff 衔接（父单子），紫实线 = 分支（扇出，父带 `⑂N` 徽章），虚线橙 = 手工衔接 |
 | 手工衔接 | 节点间拖拽即可补记「这个会话接着那个会话」，与原生血缘合并计算语义 |
 | handoff 待接提示 | 紫框 = 调用过 handoff skill 且无前驱（待接前驱）；金框 = 出现过 handoff 调用且无后继（待接后继） |
+| 归档会话显示 | 头部切换「**显示全部会话**（默认，归档框虚线 + 归档标签）/ **隐藏归档会话**」，归档状态来自工作区注册表归档集 |
 | 详情区 + 轮次条 | 点击节点查看会话详情；一排轮次横条翻看完整对话，handoff 调用轮金色高亮 |
 | 工作区切换 | 顶部下拉切换会话桶，「当前会话工作区」自动跟随；页签计数实时显示顶层会话数 |
 | 一键跳转 | 双击节点（或详情区按钮）直接切换到该会话，跨工作区生效 |
@@ -54,6 +55,12 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 - 头部下拉切换排序键：**按创建时间（默认）/ 按最后活动**
 - 方向：**从新到老（默认）/ 从老到新**；从新到老时主轴箭头在左端
 
+### 归档会话
+
+- 头部下拉切换：**显示全部会话（默认）/ 隐藏归档会话**；归档状态来自工作区注册表的归档集（即 DSH 侧边栏「归档」动作写入的数据）
+- 显示全部模式下，归档会话框为**虚线边框** + 「归档」标签，详情区标注「已归档」；隐藏模式下归档会话从时间线移除（触及它们的连线一并消失）
+- 头部统计在有归档会话时追加归档数；页签计数跟随所选模式
+
 ### 血缘链
 
 - **节点** = 工作区的顶层会话（`session-` 前缀；subagent 会话不入线）
@@ -74,6 +81,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 ## 数据与隐私
 
 - **只读**扫描 `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`（header、标题、首条用户消息时间、末事件时间、handoff 调用明细；zstd 多帧解码 + mtime/size 缓存）
+- 归档状态同样**只读**：读工作区注册表归档集（服务镜像，兜底 `~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds`）
 - **唯一写入**：手工衔接落 `~/.dsh/session-timeline/<bucket>.json`（按工作区隔离）
 - 不上传任何数据，不改动会话存储
 
@@ -82,7 +90,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 | 端点 | 说明 |
 |---|---|
 | `GET /workspaces` | 工作区清单 `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
-| `GET /list?workspace=<桶\|__global__>&session=<id>` | 节点 + 原生边 + 手工衔接清单 |
+| `GET /list?workspace=<桶\|__global__>&session=<id>` | 节点（含 `archived` 标记）+ 原生边 + 手工衔接清单 |
 | `GET /turns?session=<id>&workspace=<桶>&turn=N` | 轮次明细（`&turn=N` 单轮按需取） |
 | `POST /link` `{workspace?, session?, from, to}` | 建立手工衔接（按创建时间归一定向，幂等） |
 | `POST /unlink` `{workspace?, session?, from, to}` | 删除手工衔接（双向匹配） |

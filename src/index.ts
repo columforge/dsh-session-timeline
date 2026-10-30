@@ -11,9 +11,14 @@
  * Manual drag links are stored per workspace at ~/.dsh/session-timeline/<bucket>.json.
  * API (/session-timeline/api):
  *   GET  /workspaces?session=…        workspace list (buckets)
- *   GET  /list?session=…&workspace=…  nodes + native edges + manual links
+ *   GET  /list?session=…&workspace=…  nodes (+archived flag) + native edges + manual links
  *   POST /link   { session?, workspace?, from, to }
  *   POST /unlink { session?, workspace?, from, to }
+ * Archive state: the workspace registry's global archive set
+ * (ctx 'workspaceRegistry' service when present, else the durable
+ * ~/.dsh/storages/workspace.json global.archivedSessionIds) is stamped onto
+ * each /list node at response time — never into the parse cache, because
+ * archiving changes nothing in the session log file.
  */
 import type { Context } from 'cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -60,6 +65,8 @@ export interface SessionNode {
   handoffUsed: boolean
   /** Handoff skill invocations (seq/time/turn, in log order). */
   handoffHits: HandoffHit[]
+  /** In the workspace registry's archive set (stamped at /list assembly; not part of the parse cache). */
+  archived: boolean
 }
 
 /** Native edge: handoff (single child, chained) / branch (multiple children). */
@@ -201,6 +208,35 @@ export function apply(ctx: Context, config: Config): void {
   const sessionsRoot = join(dshHomeDir(), 'sessions')
   mkdirSync(root, { recursive: true })
 
+  /* ---- Workspace archive set (service first, durable file fallback) ---- */
+
+  const archiveFile = join(dshHomeDir(), 'storages', 'workspace.json')
+  let archiveCache: { mtimeMs: number; ids: Set<string> } | null = null
+  /** The registry-global archive set; read failures degrade to "nothing archived". */
+  const archivedIds = (): Set<string> => {
+    // Runtime mirror first (works with any storage backend); optional get —
+    // absent/unstarted registry falls through to the durable file below.
+    const reg = (ctx as unknown as { get?: (key: string) => { archivedSessionIds?: readonly string[] } | undefined })
+      .get?.('workspaceRegistry')
+    if (reg?.archivedSessionIds !== undefined) return new Set(reg.archivedSessionIds)
+    try {
+      const st = statSync(archiveFile)
+      if (archiveCache !== null && archiveCache.mtimeMs === st.mtimeMs) return archiveCache.ids
+      const parsed = JSON.parse(readFileSync(archiveFile, 'utf8')) as { global?: { archivedSessionIds?: unknown } }
+      const ids = Array.isArray(parsed?.global?.archivedSessionIds)
+        ? new Set((parsed.global.archivedSessionIds as unknown[]).filter((x): x is string => typeof x === 'string'))
+        : new Set<string>()
+      archiveCache = { mtimeMs: st.mtimeMs, ids }
+      return ids
+    } catch { /* unreadable/absent storage file = no archive info */ }
+    return new Set()
+  }
+
+  /** Stamp the response-only archived flag (parse cache stays flag-free). */
+  const stampArchived = (nodes: SessionNode[]): SessionNode[] => {
+    const ids = archivedIds()
+    return nodes.map((n) => ({ ...n, archived: ids.has(n.id) }))
+  }
 
   /** Session id → bucket (scans session buckets; positive results cached). */
   const bucketCache = new Map<string, string>()
@@ -250,6 +286,9 @@ export function apply(ctx: Context, config: Config): void {
                 handoffFirst: parsed.handoffFirst,
                 handoffUsed: parsed.handoffUsed,
                 handoffHits: parsed.handoffHits,
+                // Response-time flag: the parse cache always carries false;
+                // stampArchived overwrites it at /list assembly.
+                archived: false,
               }
             : null,
         }
@@ -407,7 +446,7 @@ export function apply(ctx: Context, config: Config): void {
             ok: true,
             bucket: GLOBAL_BUCKET,
             unreadable: g.unreadable,
-            sessions: g.nodes,
+            sessions: stampArchived(g.nodes),
             edges: g.edges,
             manualLinks: g.links,
           })
@@ -420,7 +459,7 @@ export function apply(ctx: Context, config: Config): void {
           ok: true,
           bucket: located.bucket,
           unreadable,
-          sessions: nodes,
+          sessions: stampArchived(nodes),
           edges: nativeEdges(nodes),
           manualLinks: doc.doc.links,
         })

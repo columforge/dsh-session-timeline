@@ -19,12 +19,21 @@
  * turn/time/message seq.
  * Double-click a node = switch to that session; the header "global timeline"
  * toggle aggregates all workspaces.
+ * Archive display (header select, two modes over the host-stamped `archived`
+ * flag): "show all" (default = current behavior) draws archived session boxes
+ * with dashed borders plus an archived tag; "hide archived" filters archived
+ * sessions out before layout — spurs/edges touching hidden nodes drop out via
+ * the existing layout-presence checks. The mode is panel-ephemeral (like
+ * sort/direction) and shared with the tab-title count via a module store.
  * Three interaction channels stay independent: wheel = native browser
  * scrolling (Ctrl+wheel = browser zoom, neither intercepted); left-drag on
  * empty canvas = pan (dragging from a node still creates a manual link);
  * canvas zoom only via the top-left −/+ controls (±10%, anchored to the
  * viewport center; click the percentage to reset to 100%).
  * Build: tsdown → lib/client.js (ModuleLoader registration).
+ * All visible copy routes through the Client locale service (dictionaries in
+ * ./locales, 8 languages) and follows the language configured in DSH; host
+ * API errors surface as stable code+params and render localized too.
  * ⚠️ client must export const inject; slots.register requires a name field.
  */
 const React = require('react') as typeof import('react')
@@ -33,6 +42,7 @@ import {
 } from '../geometry/layout.js'
 import { routeEdgePath, OBST_PAD, type Obstacle } from '../geometry/routing.js'
 import { lineageDegrees, displayKind } from '../geometry/lineage.js'
+import { NS, dictionaries, zh, type Translate } from './locales.js'
 const h = React.createElement
 const { useEffect, useMemo, useRef, useState } = React
 
@@ -45,9 +55,27 @@ const P = require('@deepseek-ai/dsh-client-ui-primitives') as {
 const API_BASE = '/session-timeline/api'
 const POLL_MS = 8000
 const FETCH_TIMEOUT_MS = 15000
-const PANEL_TITLE = '会话时间线'
 const TAB_ID = '@dsh-external/session-timeline'
 const TAB_KIND = 'session-timeline'
+
+/** {name} placeholder interpolation (same semantics as LocaleRuntime.translate). */
+function interpolate(template: string, params?: Record<string, unknown>): string {
+  if (params === undefined) return template
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match))
+}
+
+/** Module-level translate fallback: renders zh when the locale service is absent (pre-i18n behavior). */
+let T: Translate = (key, params) => interpolate(zh[key as keyof typeof zh] ?? key, params)
+
+/** Host API error → copy in the active language: error.<code> first, then the raw error text, then a generic failure. */
+function errorText(t: Translate, r: { code?: string; params?: Record<string, unknown>; error?: string }): string {
+  if (typeof r.code === 'string' && r.code !== '') {
+    const key = 'error.' + r.code
+    const text = t(key, r.params)
+    if (text !== key) return text
+  }
+  return r.error !== undefined && r.error !== '' ? r.error : t('error.opFailed')
+}
 
 /** The panel's selected workspace (null = follow the current session's bucket). The tab title counts from this,
  *  kept consistent with the panel body; reset on unmount. */
@@ -60,6 +88,21 @@ function setViewBucket(value: string | null): void {
 function subscribeViewBucket(listener: () => void): () => void {
   viewBucket.listeners.add(listener)
   return () => { viewBucket.listeners.delete(listener) }
+}
+
+/** The panel's archive display mode: 'all' = show every session, archived boxes dashed-marked
+ *  (default = pre-feature behavior); 'hide' = archived sessions filtered out before layout.
+ *  Panel-ephemeral like sort/direction; shared with the tab-title count (same pattern as viewBucket). */
+type ArchiveMode = 'all' | 'hide'
+const archiveView: { value: ArchiveMode; listeners: Set<() => void> } = { value: 'all', listeners: new Set() }
+function setArchiveView(value: ArchiveMode): void {
+  if (archiveView.value === value) return
+  archiveView.value = value
+  for (const listener of [...archiveView.listeners]) listener()
+}
+function subscribeArchiveView(listener: () => void): () => void {
+  archiveView.listeners.add(listener)
+  return () => { archiveView.listeners.delete(listener) }
 }
 
 /** UI-side panel height cap; geometry constants/pure functions live in ../geometry (unit-tested). */
@@ -83,6 +126,8 @@ type SNode = {
   handoffUsed: boolean
   /** Handoff skill invocations (seq/time/turn, in log order). */
   handoffHits: { seq: number; at: number; turn: number }[]
+  /** In the workspace registry's archive set (host-stamped at /list assembly). */
+  archived?: boolean
 }
 type NEdge = { from: string; to: string; kind: 'handoff' | 'branch' }
 type MLink = { from: string; to: string; created_at: string }
@@ -90,6 +135,9 @@ type Workspace = { bucket: string; cwd: string | null; sessions: number; newest:
 type Snapshot = {
   ok: boolean
   error?: string
+  /** Stable error code (client translates via the error.<code> dictionary key) + interpolation params. */
+  code?: string
+  params?: Record<string, unknown>
   bucket?: string
   unreadable?: number
   sessions?: SNode[]
@@ -108,10 +156,15 @@ type Ctx = {
   uiWorkspace?: {
     openSession: (target: string) => void
   }
+  /** Client locale service (provided by dsh-client-locale; the panel falls back to zh without it). */
+  locale?: {
+    bind: (ns: string) => Translate
+    register: (ns: string, dicts: Record<string, Record<string, string>>) => unknown
+  }
   effect: (fn: () => void, label?: string) => unknown
 }
 
-export const inject = ['slots', 'sidebarRightTabs', 'uiWorkspace']
+export const inject = ['slots', 'sidebarRightTabs', 'uiWorkspace', 'locale']
 
 const DIM = 'var(--dsw-alias-text-secondary, rgba(128,128,128,0.85))'
 const ACCENT = 'var(--dsw-alias-accent-primary, #3b82f6)'   // handoff link (solid bent)
@@ -150,13 +203,15 @@ function listUrl(workspace: string | undefined, sessionId: string | undefined): 
   return API_BASE + '/list' + (s === '' ? '' : '?' + s)
 }
 
-function post(action: 'link' | 'unlink', payload: Record<string, unknown>): Promise<{ ok?: boolean; error?: string; duplicate?: boolean } | null> {
+type LinkResult = { ok?: boolean; error?: string; duplicate?: boolean; code?: string; params?: Record<string, unknown> }
+
+function post(action: 'link' | 'unlink', payload: Record<string, unknown>): Promise<LinkResult | null> {
   return fetch(API_BASE + '/' + action, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
-    .then((r) => r.json() as Promise<{ ok?: boolean; error?: string; duplicate?: boolean }>)
+    .then((r) => r.json() as Promise<LinkResult>)
     .catch(() => null)
 }
 
@@ -171,12 +226,12 @@ function fetchWorkspaces(): Promise<Workspace[] | null> {
 }
 
 /** Polls the host API; pauses while the page is hidden. workspace first, else locate by the current session. */
-function useSnapshot(workspace: string | undefined, sessionId: string | undefined): [Snapshot | undefined, () => void] {
+function useSnapshot(t: Translate, workspace: string | undefined, sessionId: string | undefined): [Snapshot | undefined, () => void] {
   const [snap, setSnap] = useState<Snapshot | undefined>(undefined)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchOnce = (): void => {
-    if (workspace === undefined && sessionId === undefined) { setSnap({ ok: false, error: '未定位当前会话，无法确定工作区' }); return }
+    if (workspace === undefined && sessionId === undefined) { setSnap({ ok: false, code: 'noSession' }); return }
     const ctrl = new AbortController()
     const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
     fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
@@ -195,7 +250,7 @@ function useSnapshot(workspace: string | undefined, sessionId: string | undefine
       if (timer.current !== null) clearInterval(timer.current)
       document.removeEventListener('visibilitychange', onVis)
     }
-  }, [workspace, sessionId])
+  }, [t, workspace, sessionId])
   return [snap, fetchOnce]
 }
 
@@ -208,9 +263,9 @@ const legendLine = (color: string, dashed: boolean, label: string): unknown =>
   h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
     h('span', { style: { display: 'inline-block', width: 22, height: 0, borderTop: '2px ' + (dashed ? 'dashed ' : 'solid ') + color } }),
     h('span', null, label))
-const legendFrame = (color: string, label: string): unknown =>
+const legendFrame = (color: string, label: string, dashed = false): unknown =>
   h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
-    h('span', { style: { display: 'inline-block', width: 11, height: 11, borderRadius: 3, border: '2px solid ' + color, boxSizing: 'border-box' } }),
+    h('span', { style: { display: 'inline-block', width: 11, height: 11, borderRadius: 3, border: '2px ' + (dashed ? 'dashed ' : 'solid ') + color, boxSizing: 'border-box' } }),
     h('span', null, label))
 const legendTag = (label: string): unknown =>
   h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
@@ -249,17 +304,18 @@ class PanelBoundary extends React.Component<{ children?: unknown }, { error: Err
   render(): unknown {
     if (this.state.error !== null) {
       return h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12.5, padding: 12 } },
-        '会话时间线渲染失败：' + String(this.state.error.message ?? this.state.error))
+        T('state.renderFailed', { message: String(this.state.error.message ?? this.state.error) }))
     }
     return this.props.children
   }
 }
 
-function PanelBody(props: { sessionId?: string; openSession: (id: string) => void }): unknown {
+function PanelBody(props: { sessionId?: string; openSession: (id: string) => void; t?: Translate }): unknown {
   const { sessionId, openSession } = props
+  const t: Translate = props.t ?? T
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null)
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
-  const [snap, refresh] = useSnapshot(workspace, sessionId)
+  const [snap, refresh] = useSnapshot(t, workspace, sessionId)
   const [selected, setSelected] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -284,15 +340,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     if (workspace === undefined && snap?.bucket !== undefined) sessionBucketRef.current = snap.bucket
   }, [workspace, snap])
 
-  /* Sort: creation time (default) / last activity; direction: old→new (default) / new→old. */
+  /* Sort: creation time (default) / last activity; direction: old→new (default) / new→old.
+   * Archive mode applies before both: 'hide' drops archived sessions from the timeline entirely. */
+  const [archiveMode, setArchiveModeState] = useState<ArchiveMode>(archiveView.value)
+  const setArchiveMode = (mode: ArchiveMode): void => {
+    setArchiveModeState(mode)
+    setArchiveView(mode)
+  }
   const [sortBy, setSortBy] = useState<'createdAt' | 'lastAt'>('createdAt')
   const [newestFirst, setNewestFirst] = useState(true)
   const sortedNodes = useMemo(() => {
-    const list = [...(snap?.sessions ?? [])]
+    const all = snap?.sessions ?? []
+    const list = archiveMode === 'hide' ? all.filter((n) => !n.archived) : [...all]
     list.sort((a, b) => (sortBy === 'createdAt' ? a.createdAt - b.createdAt : a.lastAt - b.lastAt) || (a.id < b.id ? -1 : 1))
     if (newestFirst) list.reverse()
     return list
-  }, [snap, sortBy, newestFirst])
+  }, [snap, sortBy, newestFirst, archiveMode])
   const layout = useMemo(() => computeLayout(sortedNodes, snap?.edges ?? [], snap?.manualLinks ?? []), [sortedNodes, snap])
   const { nodes } = layout
   const edges = snap?.edges ?? []
@@ -478,10 +541,10 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     else if (sessionId !== undefined) payload.session = sessionId
     const r = await post(action, payload)
     setBusy(false)
-    if (r === null) { setMsg('请求失败（网络/服务不可达），稍后自动重试轮询'); return }
-    if (r.ok !== true) { setMsg(r.error ?? '操作失败'); return }
-    if (action === 'link') setMsg(r.duplicate === true ? '已存在手工衔接' : '已建立手工衔接')
-    else setMsg('已断开手工衔接')
+    if (r === null) { setMsg(t('error.requestFailed')); return }
+    if (r.ok !== true) { setMsg(errorText(t, r)); return }
+    if (action === 'link') setMsg(r.duplicate === true ? t('msg.linkDuplicate') : t('msg.linked'))
+    else setMsg(t('msg.unlinked'))
     refresh()
   }
 
@@ -514,10 +577,10 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   }, [drag === null ? null : drag.from, workspace, sessionId, zoom])
 
   if (snap === undefined) {
-    return h('div', { style: { color: DIM, fontSize: 12.5, padding: 12 } }, '加载中…')
+    return h('div', { style: { color: DIM, fontSize: 12.5, padding: 12 } }, t('state.loading'))
   }
   if (snap.ok !== true) {
-    return h('div', { style: { color: DIM, fontSize: 12.5, padding: 12 } }, snap.error ?? '')
+    return h('div', { style: { color: DIM, fontSize: 12.5, padding: 12 } }, errorText(t, snap))
   }
 
   const sel = selected !== null ? byId.get(selected) : undefined
@@ -529,16 +592,16 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     ? [
         ...edges.filter((e) => e.from === sel.id).map((e) => ({
           id: e.to,
-          mark: displayKind(e, degree) === 'branch' ? '（分支）' : '',
+          mark: displayKind(e, degree) === 'branch' ? t('edge.kind.branch') : '',
           unlink: null as { from: string; to: string } | null,
         })),
-        ...selManualOut.map((l) => ({ id: l.to, mark: '（手工）', unlink: { from: l.from, to: l.to } as { from: string; to: string } | null })),
+        ...selManualOut.map((l) => ({ id: l.to, mark: t('edge.kind.manual'), unlink: { from: l.from, to: l.to } as { from: string; to: string } | null })),
       ]
     : []
   const titleOf = (id: string): string => byId.get(id)?.title ?? shortId(id)
   const wsLabel = (w: Workspace): string => {
     const tail = w.cwd !== null && w.cwd !== '' ? w.cwd.split('/').filter(Boolean).pop() ?? w.cwd : w.bucket
-    return tail + '（' + String(w.sessions) + '）'
+    return tail + t('fmt.count', { count: w.sessions })
   }
   /* Stats criterion = link display kind (merged out-degree), matching the actual canvas colors. */
   const handoffCount = edges.filter((e) => displayKind(e, degree) === 'handoff').length
@@ -566,7 +629,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     return h('div', {
       key: n.id,
       'data-node-id': n.id,
-      title: (n.title ?? n.id) + '\n双击切换到该会话；拖到另一节点建立手工衔接',
+      title: (n.title ?? n.id) + '\n' + t('node.hint'),
       style: {
         position: 'absolute',
         left: i * SPACING + (SPACING - NODE_W) / 2,
@@ -575,7 +638,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         height: NODE_H,
         boxSizing: 'border-box',
         borderRadius: 8,
-        border: (nudgeFirst || nudgeLast) ? '2px solid ' + border : '1px solid ' + border,
+        /* Archived sessions draw dashed frames ("show all" mode marker; hide mode removes them entirely). */
+        border: (nudgeFirst || nudgeLast) ? '2px ' + (n.archived ? 'dashed ' : 'solid ') + border : '1px ' + (n.archived ? 'dashed ' : 'solid ') + border,
         boxShadow: shadow,
         opacity: isDragSrc ? 0.55 : 1,
         padding: (nudgeFirst || nudgeLast) ? '5px 7px' : '6px 8px',
@@ -617,15 +681,16 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           WebkitBoxOrient: 'vertical',
           minHeight: 31,
         },
-      }, n.title ?? '（无标题）'),
+      }, n.title ?? t('node.untitled')),
       h('div', { style: { display: 'flex', gap: 4, marginTop: 'auto', flexWrap: 'wrap' } },
         /* The "handoff" tag = handoff skill invoked or opened from a handoff seed;
          * never by "handoff" text in the first message (would mislabel sessions discussing handoff). */
         (n.seeded || n.handoffUsed) ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
         kids >= 2 ? h(P.Tag, { tone: 'info' }, '⑂' + String(kids)) : null,
-        nudgeFirst ? h(P.Tag, { tone: 'info' }, '待接前驱') : null,
-        nudgeLast ? h(P.Tag, { tone: 'warning' }, '待接后继') : null,
-        n.parent !== null && !byId.has(n.parent) ? h(P.Tag, { tone: 'quiet' }, '外部父') : null,
+        nudgeFirst ? h(P.Tag, { tone: 'info' }, t('node.tag.awaitParent')) : null,
+        nudgeLast ? h(P.Tag, { tone: 'warning' }, t('node.tag.awaitChild')) : null,
+        n.parent !== null && !byId.has(n.parent) ? h(P.Tag, { tone: 'quiet' }, t('node.tag.externalParent')) : null,
+        n.archived === true ? h(P.Tag, { tone: 'quiet' }, t('node.tag.archived')) : null,
       ),
     )
   }
@@ -642,7 +707,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: DIM, flexWrap: 'wrap' } },
       h('select', {
         value: workspace ?? '',
-        title: '查看哪个工作区的时间线',
+        title: t('header.workspaceTitle'),
         style: {
           fontSize: 12, maxWidth: 150, padding: '2px 4px', borderRadius: 6,
           border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
@@ -653,14 +718,14 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           setWorkspace(ev.target.value === '' ? undefined : ev.target.value)
         },
       },
-        h('option', { value: '' }, '当前会话工作区'),
+        h('option', { value: '' }, t('header.workspaceCurrent')),
         ...(workspaces ?? [])
           .filter((w) => w.bucket !== sessionBucketRef.current)
           .map((w) => h('option', { key: w.bucket, value: w.bucket, title: w.cwd ?? w.bucket }, wsLabel(w))),
       ),
       h('select', {
         value: newestFirst ? 'newOld' : 'oldNew',
-        title: '时间方向',
+        title: t('header.orderTitle'),
         style: {
           fontSize: 12, padding: '2px 4px', borderRadius: 6,
           border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
@@ -671,12 +736,12 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           setNewestFirst(ev.target.value === 'newOld')
         },
       },
-        h('option', { value: 'oldNew' }, '从老到新'),
-        h('option', { value: 'newOld' }, '从新到老'),
+        h('option', { value: 'oldNew' }, t('header.orderOldNew')),
+        h('option', { value: 'newOld' }, t('header.orderNewOld')),
       ),
       h('select', {
         value: sortBy,
-        title: '排序方式',
+        title: t('header.sortTitle'),
         style: {
           fontSize: 12, padding: '2px 4px', borderRadius: 6,
           border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
@@ -687,13 +752,31 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           setSortBy(ev.target.value === 'lastAt' ? 'lastAt' : 'createdAt')
         },
       },
-        h('option', { value: 'createdAt' }, '按创建时间'),
-        h('option', { value: 'lastAt' }, '按最后活动'),
+        h('option', { value: 'createdAt' }, t('header.sortCreated')),
+        h('option', { value: 'lastAt' }, t('header.sortLast')),
+      ),
+      h('select', {
+        value: archiveMode,
+        title: t('header.archiveTitle'),
+        style: {
+          fontSize: 12, padding: '2px 4px', borderRadius: 6,
+          border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
+          background: 'var(--dsw-alias-surface-raised, transparent)', color: 'inherit',
+        },
+        onChange: (ev: React.ChangeEvent<HTMLSelectElement>): void => {
+          setSelected(null)
+          setArchiveMode(ev.target.value === 'hide' ? 'hide' : 'all')
+        },
+      },
+        h('option', { value: 'all' }, t('header.archiveShowAll')),
+        h('option', { value: 'hide' }, t('header.archiveHide')),
       ),
       h('span', null,
-        String(nodes.length) + ' 会话 · 衔接 ' + String(handoffCount) +
-        ' · 分支 ' + String(branchCount) + ' · 手工 ' + String(manualLinks.length) +
-        ((snap.unreadable ?? 0) > 0 ? ' · ' + String(snap.unreadable ?? 0) + ' 个不可读' : '')),
+        t('stats.summary', { sessions: nodes.length, handoff: handoffCount, branch: branchCount, manual: manualLinks.length }) +
+        ((snap.sessions ?? []).some((n) => n.archived === true)
+          ? ' ' + t('stats.archived', { count: (snap.sessions ?? []).filter((n) => n.archived === true).length })
+          : '') +
+        ((snap.unreadable ?? 0) > 0 ? ' ' + t('stats.unreadable', { count: snap.unreadable ?? 0 }) : '')),
       msg !== null ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, msg) : null,
       h('span', { style: { marginLeft: 'auto' } },
         h(P.Button, {
@@ -702,7 +785,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             refresh()
             void fetchWorkspaces().then((ws) => { if (ws !== null) setWorkspaces(ws) })
           },
-        }, '刷新')),
+        }, t('header.refresh'))),
     ),
     /* Fishbone timeline: horizontal + vertical scrolling (native wheel, no zoom); top-left zoom controls;
      * left-drag on empty space = pan (grab/grabbing). */
@@ -720,24 +803,24 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         },
       },
         h('span', {
-          title: '缩小（10%）',
+          title: t('zoom.out'),
           style: { cursor: 'pointer', padding: '0 5px', color: zoom > 0.1 + 1e-9 ? 'inherit' : DIM },
           onClick: (): void => zoomAtCenter(zoom - 0.1),
         }, '−'),
         h('span', {
-          title: zoom === 1 ? '100%（原始比例）' : '点击复位 100%',
+          title: zoom === 1 ? t('zoom.fit') : t('zoom.reset'),
           style: { minWidth: 40, textAlign: 'center', cursor: zoom === 1 ? 'default' : 'pointer' },
           onClick: (): void => { if (zoom !== 1) zoomAtCenter(1) },
         }, String(Math.round(zoom * 100)) + '%'),
         h('span', {
-          title: '放大（10%）',
+          title: t('zoom.in'),
           style: { cursor: 'pointer', padding: '0 5px', color: zoom < 3 - 1e-9 ? 'inherit' : DIM },
           onClick: (): void => zoomAtCenter(zoom + 0.1),
         }, '+'),
       ),
       h('div', {
         ref: viewportRef,
-        title: '空白处按住拖拽 = 平移 · 滚轮 = 上下滚动 · 画布缩放用左上角 −/+',
+        title: t('canvas.hint'),
         onPointerDown: onViewportPointerDown,
         style: {
           overflowX: 'auto', overflowY: 'auto',
@@ -875,32 +958,33 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     /* Detail pane: no selection = actions + legend (link swatches / frames & tags) + one-line layout note. */
     sel === undefined
       ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 } },
-          legendRow('操作', [
-            legendItem('拖动节点到另一节点', '手工衔接'),
-            legendItem('双击', '切换会话'),
-            legendItem('单击', '会话详情'),
-            legendItem('空白处拖拽', '平移'),
+          legendRow(t('legend.groupActions'), [
+            legendItem(t('legend.action.dragNode'), t('legend.meaning.manual')),
+            legendItem(t('legend.action.doubleClick'), t('legend.meaning.switchSession')),
+            legendItem(t('legend.action.click'), t('legend.meaning.details')),
+            legendItem(t('legend.action.dragEmpty'), t('legend.meaning.pan')),
           ]),
-          legendRow('画布', [
-            legendItem('滚轮', '滚动画布'),
-            legendItem('缩放', '只走左上角 −/+'),
+          legendRow(t('legend.groupCanvas'), [
+            legendItem(t('legend.action.wheel'), t('legend.meaning.scroll')),
+            legendItem(t('legend.action.zoom'), t('legend.meaning.zoomControls')),
           ]),
-          legendRow('血缘链', [
-            h('span', { key: 'def' }, '原生边 ∪ 手工衔接'),
-            legendItem('⑂N 徽章 / 分支判定 / 金紫框 / 详情血缘叙述', '均按合并链计算'),
+          legendRow(t('legend.groupLineage'), [
+            h('span', { key: 'def' }, t('legend.lineageDefinition')),
+            legendItem(t('legend.action.mergedCriteria'), t('legend.meaning.mergedChain')),
           ]),
           h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
-            legendLine(ACCENT, false, '链式 handoff（父单子）'),
-            legendLine(BRANCH, false, '分支/扇出（父后继 ≥ 2，手工后继计入）'),
-            legendLine(MANUAL, true, '手工衔接（host 按创建时间定向）')),
+            legendLine(ACCENT, false, t('legend.line.handoff')),
+            legendLine(BRANCH, false, t('legend.line.branch')),
+            legendLine(MANUAL, true, t('legend.line.manual'))),
           h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
-            legendFrame(FIRST_NUDGE, '待接前驱：首对话调用过 handoff 且无前驱'),
-            legendFrame(LAST_NUDGE, '待接后继：出现过 handoff 调用且无后继'),
-            legendTag('调用过 handoff skill 或以 handoff 种子开场')),
+            legendFrame(FIRST_NUDGE, t('legend.frame.awaitParent')),
+            legendFrame(LAST_NUDGE, t('legend.frame.awaitChild')),
+            legendFrame('var(--dsw-alias-border-primary, rgba(128,128,128,0.35))', t('legend.frame.archived'), true),
+            legendTag(t('legend.tag.handoff'))),
           h('div', null,
-            '选中会话可在详情区查看 handoff 调用的轮次与时间。'))
+            t('legend.footer')))
       : h('div', {
-          title: '外框滚轮 = 上一轮/下一轮 · 点轮次条直达 · 内容框内滚轮翻看对话',
+          title: t('detail.hint'),
           onWheel: (ev: React.WheelEvent): void => {
             if (turnsData === null || turnsData.turns === 0) return
             const now = Date.now()
@@ -919,16 +1003,21 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             h('div', { style: { fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-              sel.title ?? '（无标题）'),
-            h(P.Button, { variant: 'ghost', size: 'sm', onClick: (): void => openSession(sel.id) }, '切换到该会话'),
+              sel.title ?? t('node.untitled')),
+            h(P.Button, { variant: 'ghost', size: 'sm', onClick: (): void => openSession(sel.id) }, t('detail.open')),
           ),
           h('div', { style: { color: DIM, fontSize: 11.5, fontFamily: MONO } },
-            shortId(sel.id) + ' · 活动至 ' + fmtFull(sel.lastAt) +
-            '（创建 ' + fmt(sel.createdAt) + '）' +
-            (sel.logCreatedAt > 0 && sel.logCreatedAt !== sel.createdAt
-              ? ' · 日志创建 ' + fmt(sel.logCreatedAt) : '') +
-            ' · ' + bucketTail(sel.bucket) +
-            (sel.seeded ? ' · handoff 种子开场' : '')),
+            [
+              shortId(sel.id),
+              t('detail.lastActive', { time: fmtFull(sel.lastAt) }),
+              t('detail.created', { time: fmt(sel.createdAt) }),
+              ...(sel.logCreatedAt > 0 && sel.logCreatedAt !== sel.createdAt
+                ? [t('detail.logCreated', { time: fmt(sel.logCreatedAt) })]
+                : []),
+              bucketTail(sel.bucket),
+              ...(sel.seeded ? [t('detail.seeded')] : []),
+              ...(sel.archived === true ? [t('detail.archived')] : []),
+            ].join(' · ')),
           /* Lineage row = merged-chain predecessor narration: native parent (in/out of view) + manual
            * in-edges (marked manual, inline disconnect); "root session" only when no predecessor at all.
            * Branch marking follows the merged out-degree (parent successors ≥ 2). */
@@ -938,61 +1027,61 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             let nativeMissing = false
             if (sel.parent !== null) {
               if (byId.has(sel.parent)) {
-                nativeNote = '衔接自「' + titleOf(sel.parent) + '」' +
-                  ((degree.get(sel.parent)?.out ?? 0) >= 2 ? '（分支）' : '')
+                nativeNote = t('lineage.from', { title: titleOf(sel.parent) }) +
+                  ((degree.get(sel.parent)?.out ?? 0) >= 2 ? t('edge.kind.branch') : '')
               } else {
-                nativeNote = '父会话 ' + shortId(sel.parent) + ' 不在当前视图（跨区 handoff 或已删除）'
+                nativeNote = t('lineage.fromMissing', { id: shortId(sel.parent) })
                 nativeMissing = true
               }
             }
             if (nativeNote !== null) parts.push(h('span', { key: 'nat' }, nativeNote))
             for (const l of selManualIn) {
               parts.push(h('span', { key: 'mi-' + l.from + l.to, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
-                h('span', null, '衔接自「' + titleOf(l.from) + '」（手工）'),
+                h('span', null, t('lineage.from', { title: titleOf(l.from) }) + t('edge.kind.manual')),
                 h(P.Button, {
-                  variant: 'ghost', size: 'sm', disabled: busy, title: '断开该手工衔接',
+                  variant: 'ghost', size: 'sm', disabled: busy, title: t('link.disconnectTitle'),
                   onClick: () => { void act('unlink', l.from, l.to) },
-                }, '断开')))
+                }, t('link.disconnect'))))
             }
             /* No predecessor at all = root session; a native parent merely out of view (no manual in-edge) stays dimmed gray. */
             const dim = parts.length === 0 || (nativeMissing && selManualIn.length === 0)
             return h('div', { style: { fontSize: 12, color: dim ? DIM : undefined, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
-              h('span', null, '血缘：'),
+              h('span', null, t('lineage.prefix')),
               parts.length > 0
-                ? parts.flatMap((p, i) => (i < parts.length - 1 ? [p, h('span', { key: 'sep-' + String(i) }, '；')] : [p]))
-                : h('span', null, '无父会话（根会话）'))
+                ? parts.flatMap((p, i) => (i < parts.length - 1 ? [p, h('span', { key: 'sep-' + String(i) }, t('fmt.listSep'))] : [p]))
+                : h('span', null, t('lineage.root')))
           })(),
           /* Handoff skill invocations: turn/time/message seq each; reconciles the gold/purple frame states. */
           sel.handoffHits.length > 0
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
                 h('div', { style: { fontSize: 12 } },
-                  'handoff skill：共 ' + String(sel.handoffHits.length) + ' 次调用',
+                  t('handoff.summary', { count: sel.handoffHits.length }),
                   sel.handoffFirst && (degree.get(sel.id)?.in ?? 0) === 0
-                    ? h('span', { style: { color: FIRST_NUDGE } }, '（待接前驱·紫）')
+                    ? h('span', { style: { color: FIRST_NUDGE } }, t('handoff.mark.awaitParent'))
                     : null,
                   sel.handoffUsed && (degree.get(sel.id)?.out ?? 0) === 0
-                    ? h('span', { style: { color: LAST_NUDGE } }, '（待接后继·金）')
+                    ? h('span', { style: { color: LAST_NUDGE } }, t('handoff.mark.awaitChild'))
                     : null),
                 ...sel.handoffHits.map((hit) => h('div', {
                   key: 'handoff-hit-' + String(hit.seq) + '-' + String(hit.at),
                   style: { color: DIM, fontSize: 11.5, fontFamily: MONO },
-                }, '· 第 ' + String(hit.turn) + ' 轮 · ' + (hit.at > 0 ? fmtFull(hit.at) : '时间未知') + ' · 消息 #' + String(hit.seq))),
+                }, t('handoff.hit', { turn: hit.turn, time: hit.at > 0 ? fmtFull(hit.at) : t('handoff.timeUnknown'), seq: hit.seq }))),
               )
             : null,
           /* "Links to" row = merged-chain successor narration (manual out-edges disconnect inline). */
           selOut.length > 0
             ? h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
-                h('span', null, '衔接到：'),
+                h('span', null, t('lineage.outPrefix')),
                 ...selOut.flatMap((o, i) => {
-                  const frags: unknown[] = [h('span', { key: 'out-' + String(i) }, '「' + titleOf(o.id) + '」' + o.mark)]
+                  const frags: unknown[] = [h('span', { key: 'out-' + String(i) }, t('lineage.outItem', { title: titleOf(o.id), mark: o.mark }))]
                   const u = o.unlink
                   if (u !== null) {
                     frags.push(h(P.Button, {
-                      key: 'outb-' + String(i), variant: 'ghost', size: 'sm', disabled: busy, title: '断开该手工衔接',
+                      key: 'outb-' + String(i), variant: 'ghost', size: 'sm', disabled: busy, title: t('link.disconnectTitle'),
                       onClick: () => { void act('unlink', u.from, u.to) },
-                    }, '断开'))
+                    }, t('link.disconnect')))
                   }
-                  if (i < selOut.length - 1) frags.push(h('span', { key: 'outs-' + String(i) }, '、'))
+                  if (i < selOut.length - 1) frags.push(h('span', { key: 'outs-' + String(i) }, t('fmt.enumSep')))
                   return frags
                 }))
             : null,
@@ -1067,6 +1156,9 @@ function TabTitle(props: { sessionId?: string }): unknown {
   const [count, setCount] = useState(0)
   const [bucket, setBucket] = useState<string | null>(viewBucket.value)
   useEffect(() => subscribeViewBucket(() => setBucket(viewBucket.value)), [])
+  /* Archive mode mirrors the panel body so the title count matches what the canvas shows. */
+  const [archMode, setArchMode] = useState<ArchiveMode>(archiveView.value)
+  useEffect(() => subscribeArchiveView(() => setArchMode(archiveView.value)), [])
 
   useEffect(() => {
     const workspace = bucket ?? undefined
@@ -1076,19 +1168,30 @@ function TabTitle(props: { sessionId?: string }): unknown {
       const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
       fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
         .then((r) => r.json())
-        .then((data: Snapshot) => setCount(data?.ok === true ? (data.sessions?.length ?? 0) : 0))
+        .then((data: Snapshot) => setCount(data?.ok === true
+          ? (data.sessions ?? []).filter((n) => !(archMode === 'hide' && n.archived === true)).length
+          : 0))
         .catch(() => { /* keep the previous count */ })
         .finally(() => clearTimeout(tid))
     }
     tick()
     const t = setInterval(tick, 12000)
     return () => clearInterval(t)
-  }, [bucket, sessionId])
+  }, [bucket, sessionId, archMode])
 
-  return h('span', null, PANEL_TITLE + (count > 0 ? '（' + String(count) + '）' : ''))
+  return h('span', null, T('panel.title') + (count > 0 ? '（' + String(count) + '）' : ''))
 }
 
 export function apply(ctx: Ctx): void {
+  /* Locale wiring: register this namespace's dictionaries and rebind the
+   * module translate so all copy follows the language configured in DSH;
+   * falls back to the zh module dictionary when the service is absent. */
+  if (ctx.locale) {
+    try {
+      ctx.locale.register(NS, dictionaries)
+      T = ctx.locale.bind(NS)
+    } catch { /* keep the zh fallback on any registration failure */ }
+  }
   const openSession = (id: string): void => {
     try {
       ctx.uiWorkspace?.openSession(id)
@@ -1102,12 +1205,12 @@ export function apply(ctx: Ctx): void {
     id: TAB_ID,
     kind: TAB_KIND,
     priority: 'extension',
-    title: () => PANEL_TITLE,
+    title: () => T('panel.title'),
     guide: [{
       id: 'session-timeline',
       order: 91,
-      title: () => PANEL_TITLE,
-      description: () => '鱼骨时间线：会话按创建时间交替分布在主轴上下，handoff/分支血缘弯折线衔接；可切全局时间线，拖动节点手工衔接，双击切换会话',
+      title: () => T('panel.title'),
+      description: () => T('guide.description'),
       icon: P.IconBranchOutlineRegular,
     }],
   }), 'session-timeline: tab type')
