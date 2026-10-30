@@ -13,6 +13,9 @@
  * 调用（不限末窗口）且无后继 → 金框（待接后继）；选中详情区列出每次调用
  * 的轮次/时间/消息 seq。
  * 双击节点 = 切换到该会话；头部「全局时间线」开关聚合所有工作区。
+ * 交互三通道互不干扰：滚轮 = 浏览器原生滚动（Ctrl+滚轮 = 浏览器整体缩放，
+ * 均不拦截）；画布空白处左键拖拽 = 平移（节点上拖拽仍是手工衔接）；
+ * 画布缩放只走左上角 −/+ 控件（±10%，视口中心锚定；点击百分比复位 100%）。
  * 构建：tsdown → lib/client.js（ModuleLoader 注册）。
  * ⚠️ client 须 export const inject；slots.register 必须带 name 字段。
  */
@@ -270,7 +273,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const manualLinks = snap?.manualLinks ?? []
   const displayAt = (n: SNode): number => (sortBy === 'createdAt' ? n.createdAt : n.lastAt)
 
-  /* 缩放：100% = 原始比例；按钮 ±10%，窗口内滚轮 ±5% */
+  /* 缩放：100% = 原始比例；只走左上角控件（−/+ ±10%，点击百分比复位 100%），
+   * 围绕视口中心锚定。滚轮不参与缩放——让位浏览器原生滚动（上下滑动）与
+   * 浏览器整体缩放（Ctrl+滚轮），三通道互不干扰，缩放无模式、不存在退出问题。 */
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const [zoom, setZoom] = useState(1)
   const clampZoom = (z: number): number => Math.max(0.1, Math.min(3, z))
@@ -279,25 +284,58 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const prev = zoom
     const z = clampZoom(next)
     if (vp !== undefined && vp !== null && cx !== undefined && cy !== undefined) {
-      // 围绕光标锚点缩放：保持光标下的布局点视觉位置不变
+      // 围绕锚点缩放：保持锚点下的布局点视觉位置不变
       const k = z / prev
       vp.scrollLeft = (vp.scrollLeft + cx) * k - cx
       vp.scrollTop = (vp.scrollTop + cy) * k - cy
     }
     setZoom(z)
   }
-  useEffect(() => {
+  const zoomAtCenter = (next: number): void => {
+    const vp = viewportRef.current
+    if (vp === null) { setZoom(clampZoom(next)); return }
+    applyZoom(next, vp.clientWidth / 2, vp.clientHeight / 2)
+  }
+
+  /* 画布平移：空白处（非节点）按住左键拖拽 → 1:1 移动视口滚动条（grab →
+   * grabbing；setPointerCapture 兜底出窗收尾）。节点上的拖拽仍是手工衔接
+   * 连线——入口按 data-node-id 分流；触屏不拦截（原生触摸滚动已可用）。 */
+  const panStartRef = useRef<{ x: number; y: number; sl: number; st: number } | null>(null)
+  const [panning, setPanning] = useState(false)
+  const onViewportPointerDown = (ev: React.PointerEvent): void => {
+    if (ev.pointerType !== 'mouse' || ev.button !== 0) return
+    const target = ev.target as Element | null
+    if (target !== null && typeof target.closest === 'function' &&
+        target.closest('[data-node-id]') !== null) return
     const vp = viewportRef.current
     if (vp === null) return
-    const onWheel = (ev: WheelEvent): void => {
-      ev.preventDefault()
-      const rect = vp.getBoundingClientRect()
-      const delta = ev.deltaY < 0 ? 0.05 : -0.05
-      applyZoom(zoom + delta, ev.clientX - rect.left, ev.clientY - rect.top)
+    ev.preventDefault()
+    try { vp.setPointerCapture(ev.pointerId) } catch { /* 指针已失效时忽略 */ }
+    panStartRef.current = { x: ev.clientX, y: ev.clientY, sl: vp.scrollLeft, st: vp.scrollTop }
+    setPanning(true)
+  }
+  useEffect(() => {
+    if (!panning) return
+    const move = (ev: PointerEvent): void => {
+      const p = panStartRef.current
+      const vp = viewportRef.current
+      if (p === null || vp === null) return
+      vp.scrollLeft = p.sl - (ev.clientX - p.x)
+      vp.scrollTop = p.st - (ev.clientY - p.y)
     }
-    vp.addEventListener('wheel', onWheel, { passive: false })
-    return () => vp.removeEventListener('wheel', onWheel)
-  }, [zoom])
+    const finish = (): void => {
+      panStartRef.current = null
+      setPanning(false)
+    }
+    window.addEventListener('pointermove', move, { passive: true })
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [panning])
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
   /* 日期刻度：日期变化处 + 首列；文字放鱼刺对侧 */
@@ -638,7 +676,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           },
         }, '刷新')),
     ),
-    /* 鱼骨时间线：横向 + 纵向滚动；左上角缩放控件 + 滚轮联动 */
+    /* 鱼骨时间线：横向 + 纵向滚动（滚轮原生滚动，不缩放）；左上角缩放控件；
+     * 空白处左键拖拽 = 平移画布（grab/grabbing） */
     h('div', { style: { position: 'relative', flex: '0 0 auto' } },
       /* 缩放控件（窗口左上角浮层，置顶不被内容遮挡） */
       h('div', {
@@ -655,22 +694,29 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         h('span', {
           title: '缩小（10%）',
           style: { cursor: 'pointer', padding: '0 5px', color: zoom > 0.1 + 1e-9 ? 'inherit' : DIM },
-          onClick: (): void => setZoom((z) => clampZoom(z - 0.1)),
+          onClick: (): void => zoomAtCenter(zoom - 0.1),
         }, '−'),
-        h('span', { style: { minWidth: 40, textAlign: 'center' } }, String(Math.round(zoom * 100)) + '%'),
+        h('span', {
+          title: zoom === 1 ? '100%（原始比例）' : '点击复位 100%',
+          style: { minWidth: 40, textAlign: 'center', cursor: zoom === 1 ? 'default' : 'pointer' },
+          onClick: (): void => { if (zoom !== 1) zoomAtCenter(1) },
+        }, String(Math.round(zoom * 100)) + '%'),
         h('span', {
           title: '放大（10%）',
           style: { cursor: 'pointer', padding: '0 5px', color: zoom < 3 - 1e-9 ? 'inherit' : DIM },
-          onClick: (): void => setZoom((z) => clampZoom(z + 0.1)),
+          onClick: (): void => zoomAtCenter(zoom + 0.1),
         }, '+'),
       ),
       h('div', {
         ref: viewportRef,
+        title: '空白处按住拖拽 = 平移 · 滚轮 = 上下滚动（Ctrl+滚轮 = 浏览器缩放）· 画布缩放用左上角 −/+',
+        onPointerDown: onViewportPointerDown,
         style: {
           overflowX: 'auto', overflowY: 'auto',
           height: TIMELINE_MAX_H,
           border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.25))',
           borderRadius: 8,
+          cursor: panning ? 'grabbing' : 'grab',
         },
       },
         /* sizer：占位缩放后的布局尺寸，使滚动范围正确 */
@@ -800,8 +846,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     sel === undefined
       ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 } },
           h('div', null,
-            '拖动节点到另一节点 = 手工衔接 · 双击 = 切换会话 · 单击 = 详情。',
-            '血缘链 = 原生边 ∪ 手工衔接：⑂N 徽章、分支判定、金紫框、详情血缘叙述均按合并链计算。'),
+            '拖动节点到另一节点 = 手工衔接 · 双击 = 切换会话 · 单击 = 详情 · 空白处拖拽 = 平移。',
+            '滚轮 = 滚动画布（Ctrl+滚轮 = 浏览器缩放）；画布缩放只走左上角 −/+。血缘链 = 原生边 ∪ 手工衔接：⑂N 徽章、分支判定、金紫框、详情血缘叙述均按合并链计算。'),
           h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
             legendLine(ACCENT, false, '链式 handoff（父单子）'),
             legendLine(BRANCH, false, '分支/扇出（父后继 ≥ 2，手工后继计入）'),
