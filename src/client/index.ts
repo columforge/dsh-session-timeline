@@ -457,14 +457,16 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const sel = selected !== null ? byId.get(selected) : undefined
   const selManualIn = sel !== undefined ? manualLinks.filter((l) => l.to === sel.id) : []
   const selManualOut = sel !== undefined ? manualLinks.filter((l) => l.from === sel.id) : []
-  /* 合并链叙述：后继 = 原生出边 + 手工出边（详情「衔接到」行共用） */
+  /* 合并链叙述：后继 = 原生出边 + 手工出边（详情「衔接到」行共用；
+   * 手工出边带 unlink 引用，供内联断开按钮）。 */
   const selOut = sel !== undefined
     ? [
         ...edges.filter((e) => e.from === sel.id).map((e) => ({
           id: e.to,
           mark: displayKind(e, degree) === 'branch' ? '（分支）' : '',
+          unlink: null as { from: string; to: string } | null,
         })),
-        ...selManualOut.map((l) => ({ id: l.to, mark: '（手工）' })),
+        ...selManualOut.map((l) => ({ id: l.to, mark: '（手工）', unlink: { from: l.from, to: l.to } as { from: string; to: string } | null })),
       ]
     : []
   const titleOf = (id: string): string => byId.get(id)?.title ?? shortId(id)
@@ -840,10 +842,10 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               ? ' · 日志创建 ' + fmt(sel.logCreatedAt) : '') +
             ' · ' + bucketTail(sel.bucket) +
             (sel.seeded ? ' · handoff 种子开场' : '')),
-          /* 血缘行 = 合并链前驱叙述：原生父（在/不在视图）+ 手工入边（标注手工）；
-           * 全无前驱才报根会话。分支标注按合并出度（父的后继 ≥ 2）。 */
+          /* 血缘行 = 合并链前驱叙述：原生父（在/不在视图）+ 手工入边（标注手工，
+           * 内联断开）；全无前驱才报根会话。分支标注按合并出度（父的后继 ≥ 2）。 */
           (() => {
-            const parts: string[] = []
+            const parts: unknown[] = []
             let nativeNote: string | null = null
             let nativeMissing = false
             if (sel.parent !== null) {
@@ -855,12 +857,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                 nativeMissing = true
               }
             }
-            if (nativeNote !== null) parts.push(nativeNote)
-            for (const l of selManualIn) parts.push('衔接自「' + titleOf(l.from) + '」（手工）')
+            if (nativeNote !== null) parts.push(h('span', { key: 'nat' }, nativeNote))
+            for (const l of selManualIn) {
+              parts.push(h('span', { key: 'mi-' + l.from + l.to, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                h('span', null, '衔接自「' + titleOf(l.from) + '」（手工）'),
+                h(P.Button, {
+                  variant: 'ghost', size: 'sm', disabled: busy, title: '断开该手工衔接',
+                  onClick: () => { void act('unlink', l.from, l.to) },
+                }, '断开')))
+            }
             /* 全无前驱 = 根会话；仅剩视图外原生父（无手工入边）保持弱化灰 */
             const dim = parts.length === 0 || (nativeMissing && selManualIn.length === 0)
-            return h('div', { style: { fontSize: 12, color: dim ? DIM : undefined } },
-              '血缘：' + (parts.length > 0 ? parts.join('；') : '无父会话（根会话）'))
+            return h('div', { style: { fontSize: 12, color: dim ? DIM : undefined, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
+              h('span', null, '血缘：'),
+              parts.length > 0
+                ? parts.flatMap((p, i) => (i < parts.length - 1 ? [p, h('span', { key: 'sep-' + String(i) }, '；')] : [p]))
+                : h('span', null, '无父会话（根会话）'))
           })(),
           /* handoff skill 调用明细：每次调用的轮次/时间/消息 seq；金紫框状态对账 */
           sel.handoffHits.length > 0
@@ -879,9 +891,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                 }, '· 第 ' + String(hit.turn) + ' 轮 · ' + (hit.at > 0 ? fmtFull(hit.at) : '时间未知') + ' · 消息 #' + String(hit.seq))),
               )
             : null,
+          /* 衔接到行 = 合并链后继叙述（手工出边内联断开） */
           selOut.length > 0
-            ? h('div', { style: { fontSize: 12 } },
-                '衔接到：' + selOut.map((o) => '「' + titleOf(o.id) + '」' + o.mark).join('、'))
+            ? h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
+                h('span', null, '衔接到：'),
+                ...selOut.flatMap((o, i) => {
+                  const frags: unknown[] = [h('span', { key: 'out-' + String(i) }, '「' + titleOf(o.id) + '」' + o.mark)]
+                  const u = o.unlink
+                  if (u !== null) {
+                    frags.push(h(P.Button, {
+                      key: 'outb-' + String(i), variant: 'ghost', size: 'sm', disabled: busy, title: '断开该手工衔接',
+                      onClick: () => { void act('unlink', u.from, u.to) },
+                    }, '断开'))
+                  }
+                  if (i < selOut.length - 1) frags.push(h('span', { key: 'outs-' + String(i) }, '、'))
+                  return frags
+                }))
             : null,
           /* 轮次条：横向排列，每轮一根横条；首/末轮较大，handoff 调用轮金色
            * 高亮（选中蓝色填充 + 金边）；点击任意条展示该轮——末轮即 handoff
@@ -942,22 +967,6 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                   ]
                 })(),
           ),
-          selManualIn.length + selManualOut.length > 0
-            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                ...selManualIn.map((l) => h('div', { key: 'in' + l.from + l.to, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
-                  h('span', null, '← 手工衔接自「' + titleOf(l.from) + '」'),
-                  h(P.Button, {
-                    variant: 'ghost', size: 'sm', disabled: busy,
-                    onClick: () => { void act('unlink', l.from, l.to) },
-                  }, '断开'))),
-                ...selManualOut.map((l) => h('div', { key: 'out' + l.from + l.to, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
-                  h('span', null, '→ 手工衔接到「' + titleOf(l.to) + '」'),
-                  h(P.Button, {
-                    variant: 'ghost', size: 'sm', disabled: busy,
-                    onClick: () => { void act('unlink', l.from, l.to) },
-                  }, '断开'))),
-              )
-            : h('div', { style: { fontSize: 12, color: DIM } }, '手工衔接：无'),
         ),
   )
 }
