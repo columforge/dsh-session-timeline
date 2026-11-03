@@ -35,7 +35,7 @@ export const zh = {
   'fmt.listSep': '；',
   'fmt.enumSep': '、',
   'fmt.count': '（{count}）',
-  'guide.description': '鱼骨时间线：会话按创建时间交替分布在主轴上下，handoff/分支血缘弯折线衔接；可切全局时间线，拖动节点手工衔接，双击切换会话',
+  'guide.description': '鱼骨时间线：会话按创建时间交替分布在主轴上下，handoff/分支血缘弯折线衔接；可切「所有工作区」多线画布（每工作区一根时间线，刻度一致），拖动节点手工衔接，双击切换会话',
 
   /* 状态 */
   'state.loading': '加载中…',
@@ -177,7 +177,7 @@ export const en = {
   'fmt.listSep': '; ',
   'fmt.enumSep': ', ',
   'fmt.count': '({count})',
-  'guide.description': 'Fishbone timeline: sessions alternate above and below a central axis by creation time, joined by handoff/branch lineage links; switch to the global timeline, drag nodes to link manually, double-click to open a session',
+  'guide.description': 'Fishbone timeline: sessions alternate above and below a central axis by creation time, joined by handoff/branch lineage links; switch to the all-workspaces canvas (one timeline per workspace on a shared scale), drag nodes to link manually, double-click to open a session',
 
   'state.loading': 'Loading…',
   'state.renderFailed': 'Session Timeline failed to render: {message}',
@@ -308,7 +308,7 @@ export const ja = {
   'fmt.listSep': '；',
   'fmt.enumSep': '、',
   'fmt.count': '（{count}）',
-  'guide.description': '魚骨タイムライン：セッションを作成時刻順に主軸の上下へ交互に配置し、handoff／分岐の血縁線で接続。グローバルタイムライン切替、ノードのドラッグで手動接続、ダブルクリックでセッション切替',
+  'guide.description': '魚骨タイムライン：セッションを作成時刻順に主軸の上下へ交互に配置し、handoff／分岐の血縁線で接続。「すべてのワークスペース」でワークスペース別の複数タイムライン（共通スケール）に切替、ノードのドラッグで手動接続、ダブルクリックでセッション切替',
 
   'state.loading': '読み込み中…',
   'state.renderFailed': 'セッションタイムラインの描画に失敗しました：{message}',
@@ -439,7 +439,7 @@ export const es = {
   'fmt.listSep': '; ',
   'fmt.enumSep': ', ',
   'fmt.count': ' ({count})',
-  'guide.description': 'Línea temporal en espina de pescado: las sesiones se alternan sobre y bajo un eje central por fecha de creación, unidas por enlaces de linaje handoff/ramificación; cambia a la línea global, arrastra nodos para enlazar a mano y haz doble clic para abrir una sesión',
+  'guide.description': 'Línea temporal en espina de pescado: las sesiones se alternan sobre y bajo un eje central por fecha de creación, unidas por enlaces de linaje handoff/ramificación; cambia al lienzo de todos los espacios de trabajo (una línea temporal por espacio de trabajo con escala compartida), arrastra nodos para enlazar a mano y haz doble clic para abrir una sesión',
 
   'state.loading': 'Cargando…',
   'state.renderFailed': 'La línea temporal de sesiones no se pudo dibujar: {message}',
@@ -570,7 +570,7 @@ export const fr = {
   'fmt.listSep': ' ; ',
   'fmt.enumSep': ', ',
   'fmt.count': ' ({count})',
-  'guide.description': 'Chronologie en arête de poisson : les sessions se répartissent au-dessus et en dessous de l’axe central par date de création, reliées par les liens de filiation handoff/branche ; basculez vers la chronologie globale, faites glisser les nœuds pour lier manuellement, double-cliquez pour ouvrir une session',
+  'guide.description': 'Chronologie en arête de poisson : les sessions se répartissent au-dessus et en dessous de l’axe central par date de création, reliées par les liens de filiation handoff/branche ; basculez vers la toile de tous les espaces de travail (une chronologie par espace de travail sur une échelle partagée), faites glisser les nœuds pour lier manuellement, double-cliquez pour ouvrir une session',
 
   'state.loading': 'Chargement…',
   'state.renderFailed': 'Échec du rendu de la chronologie des sessions : {message}',
@@ -701,7 +701,7 @@ export const de = {
   'fmt.listSep': '; ',
   'fmt.enumSep': ', ',
   'fmt.count': ' ({count})',
-  'guide.description': 'Grätendiagramm: Sitzungen liegen abwechselnd ober- und unterhalb der Mittelachse, geordnet nach Erstellungszeit, verbunden durch Handoff-/Branch-Herkunftslinien; zur globalen Timeline wechseln, Knoten zum manuellen Verknüpfen ziehen, Doppelklick öffnet eine Sitzung',
+  'guide.description': 'Grätendiagramm: Sitzungen liegen abwechselnd ober- und unterhalb der Mittelachse, geordnet nach Erstellungszeit, verbunden durch Handoff-/Branch-Herkunftslinien; zur Alle-Arbeitsbereiche-Leinwand wechseln (eine Timeline pro Arbeitsbereich auf gemeinsamer Skala), Knoten zum manuellen Verknüpfen ziehen, Doppelklick öffnet eine Sitzung',
 
   'state.loading': 'Wird geladen…',
   'state.renderFailed': 'Sitzungs-Timeline konnte nicht gerendert werden: {message}',
@@ -833,7 +833,7 @@ export const ru = {
   'fmt.listSep': '; ',
   'fmt.enumSep': ', ',
   'fmt.count': ' ({count})',
-  'guide.description': 'Диаграмма «рыбья кость»: сессии чередуются выше и ниже центральной оси по времени создания, связаны линиями происхождения handoff/ветвления; переключайтесь на общую хронологию, перетаскивайте узлы для ручной связи, двойной щелчок открывает сессию',
+  'guide.description': 'Диаграмма «рыбья кость»: сессии чередуются выше и ниже центральной оси по времени создания, связаны линиями происхождения handoff/ветвления; переключайтесь на полотно всех рабочих пространств (по одной хронологии на рабочее пространство с общей шкалой), перетаскивайте узлы для ручной связи, двойной щелчок открывает сессию',
 
   'state.loading': 'Загрузка…',
   'state.renderFailed': 'Не удалось отрисовать хронологию сессий: {message}',
@@ -964,7 +964,7 @@ export const pt = {
   'fmt.listSep': '; ',
   'fmt.enumSep': ', ',
   'fmt.count': ' ({count})',
-  'guide.description': 'Linha do tempo em espinha de peixe: as sessões se alternam acima e abaixo do eixo central pela hora de criação, unidas por vínculos de linhagem handoff/ramificação; mude para a linha global, arraste nós para vincular manualmente, clique duas vezes para abrir uma sessão',
+  'guide.description': 'Linha do tempo em espinha de peixe: as sessões se alternam acima e abaixo do eixo central pela hora de criação, unidas por vínculos de linhagem handoff/ramificação; mude para a tela de todos os espaços de trabalho (uma linha temporal por espaço de trabalho numa escala partilhada), arraste nós para vincular manualmente, clique duas vezes para abrir uma sessão',
 
   'state.loading': 'Carregando…',
   'state.renderFailed': 'Falha ao renderizar a linha do tempo de sessões: {message}',

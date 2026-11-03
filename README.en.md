@@ -16,7 +16,7 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 | Handoff hints | Purple frame = used the handoff skill, no predecessor (awaiting one); gold frame = any handoff invocation, no successor (awaiting one) |
 | Archived sessions | Header display switch: **show all sessions** (default; archived boxes dashed with an "Archived" tag) / **hide archived sessions** |
 | Detail pane + turn strip | Click a node for details; a strip of turn bars pages through the full conversation with handoff turns highlighted in gold |
-| Workspace switch | Header dropdown switches session buckets; the current session's workspace shows by name; "All workspaces" draws every workspace onto one canvas (nodes carry their workspace tag); tab shows the live top-level session count |
+| Workspace switch | Header dropdown switches session buckets; the current session's workspace shows by name; "All workspaces" draws every workspace onto one canvas (one timeline per workspace on a shared scale, nodes carry their workspace tag); tab shows the live top-level session count |
 | One-click jump | Double-click a node (or the detail button) to open that session, across workspaces |
 | UI language | Follows the language configured in DSH (中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português), switching live |
 
@@ -53,8 +53,9 @@ Then enter this directory as the local path in "Add plugin".
 
 ### All workspaces on one canvas
 
-- The workspace dropdown gains "**All workspaces**": every workspace's sessions merge onto one timeline, with the workspace named on each node card and in the detail pane
-- Lineage (native handoff/branch, manual links) never crosses workspaces; in the all-workspaces view a manual drag only links two sessions of the same workspace — cross-workspace pairs are rejected with a localized error (`crossWorkspace`)
+- The workspace dropdown gains "**All workspaces**": one fishbone lane per workspace, stacked vertically; all lanes share ONE horizontal scale — the same column maps to the same x in every lane, and vertical date gridlines align across lanes for cross-workspace comparison
+- Lane order follows the current sort/direction (by default the lane with the newest session sits on top); each lane is labeled with its workspace name + session count, and node cards still carry the workspace tag
+- Lineage (native handoff/branch, manual links) never crosses workspaces; edges route within their own lane; in the all-workspaces view a manual drag only links two sessions of the same workspace — cross-workspace pairs are rejected with a localized error (`crossWorkspace`)
 - Tab-title count and header stats follow the current view (single workspace / all)
 
 ### Ordering and direction

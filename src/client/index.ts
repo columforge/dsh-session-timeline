@@ -18,12 +18,15 @@
  * (awaiting successor); the detail pane lists each invocation's
  * turn/time/message seq.
  * Double-click a node = switch to that session. The workspace select carries a
- * third mode "all workspaces" (the __global__ sentinel): every workspace's
- * sessions land on one canvas, each node tagged with its workspace name;
- * lineage (native + manual) never crosses workspaces — the host resolves each
- * dragged pair back to its own bucket and rejects cross-workspace pairs with
- * a localized error. The "follow current session" option shows the current
- * workspace's name instead of a generic label.
+ * third mode "all workspaces" (the __global__ sentinel): one canvas of
+ * per-workspace fishbone lanes stacked vertically on a shared ordinal column
+ * scale — the same column index maps to the same x in every lane, so the
+ * vertical date gridlines align across lanes (consistent ticks). Each node
+ * still tags its workspace name; lineage (native + manual) never crosses
+ * workspaces — the host resolves each dragged pair back to its own bucket and
+ * rejects cross-workspace pairs with a localized error. The "follow current
+ * session" option shows the current workspace's name instead of a generic
+ * label.
  * Archive display (header select, two modes over the host-stamped `archived`
  * flag): "show all" (default = current behavior) draws archived session boxes
  * with dashed borders plus an archived tag; "hide archived" filters archived
@@ -47,6 +50,7 @@ import {
 } from '../geometry/layout.js'
 import { routeEdgePath, OBST_PAD, type Obstacle } from '../geometry/routing.js'
 import { lineageDegrees, displayKind } from '../geometry/lineage.js'
+import { computeLanesLayout, laneNodeTop, type LanesLayout } from '../geometry/lanes.js'
 import { NS, dictionaries, zh, type Translate } from './locales.js'
 const h = React.createElement
 const { useEffect, useMemo, useRef, useState } = React
@@ -363,13 +367,20 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     if (newestFirst) list.reverse()
     return list
   }, [snap, sortBy, newestFirst, archiveMode])
+  /* All-workspaces canvas: every node carries a workspace-name tag (lineage stays per workspace). */
+  const isGlobal = workspace === GLOBAL_WORKSPACE
   const layout = useMemo(() => computeLayout(sortedNodes, snap?.edges ?? [], snap?.manualLinks ?? []), [sortedNodes, snap])
   const { nodes } = layout
   const edges = snap?.edges ?? []
   const manualLinks = snap?.manualLinks ?? []
   const displayAt = (n: SNode): number => (sortBy === 'createdAt' ? n.createdAt : n.lastAt)
-  /* All-workspaces canvas: every node carries a workspace-name tag (lineage stays per workspace). */
-  const isGlobal = workspace === GLOBAL_WORKSPACE
+  /* Lane stack for the all-workspaces canvas: one fishbone lane per workspace on a shared
+   * ordinal column scale — the same column index maps to the same x in every lane, so the
+   * vertical date gridlines align across lanes; lanes stack in first-appearance order. */
+  const lanesLayout = useMemo<LanesLayout<SNode> | null>(
+    () => (isGlobal ? computeLanesLayout(sortedNodes, edges, manualLinks, (n: SNode) => n.bucket) : null),
+    [isGlobal, sortedNodes, edges, manualLinks],
+  )
 
   /* Zoom: 100% = natural scale; only via the top-left controls (−/+ ±10%, click the percentage to reset),
    * anchored to the viewport center. The wheel never zooms — it yields to native scrolling and browser
@@ -453,6 +464,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     return marks
   }, [nodes, layout])
 
+  /* Lane mode date marks: one walk over the merged display order — the same x positions
+   * are the shared ticks of every lane (rendered as vertical gridlines + top labels). */
+  const laneMarks = useMemo(() => {
+    if (lanesLayout === null) return []
+    const marks: { x: number; date: string }[] = []
+    let last = ''
+    sortedNodes.forEach((n, i) => {
+      const d = fmtDate(displayAt(n))
+      if (d !== last || i === 0) {
+        marks.push({ x: (lanesLayout.colOf.get(n.id) ?? i) * SPACING + SPACING / 2, date: d })
+        last = d
+      }
+    })
+    return marks
+  }, [sortedNodes, lanesLayout, sortBy])
+
   /* Turn bars of the selected session: horizontal, one bar per turn (first/last larger, handoff-call turns
    * highlighted gold); clicking any bar shows that turn's dialog — first/last/handoff turns ship with /turns,
    * others are fetched on demand (/turns&turn=N, cached in fetchedTurns). When the last turn is itself a
@@ -523,6 +550,20 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     w: NODE_W + OBST_PAD * 2,
     h: NODE_H + OBST_PAD * 2,
   })), [nodes, layout])
+  /* Lane mode: per-lane obstacle lists keep A* routing inside the lane's own band. */
+  const laneObstacles = useMemo<Map<string, Obstacle[]>>(() => {
+    const m = new Map<string, Obstacle[]>()
+    if (lanesLayout === null) return m
+    for (const lane of lanesLayout.lanes) {
+      m.set(lane.id, lane.nodes.map((n) => ({
+        x: (lane.colOf.get(n.id) ?? 0) * SPACING + (SPACING - NODE_W) / 2 - OBST_PAD,
+        y: nodeTop(lane, n.id) - OBST_PAD,
+        w: NODE_W + OBST_PAD * 2,
+        h: NODE_H + OBST_PAD * 2,
+      })))
+    }
+    return m
+  }, [lanesLayout])
   const occupiedRef = useRef<Map<string, number>>(new Map())
   useEffect(() => { occupiedRef.current = new Map() }, [snap])
 
@@ -534,6 +575,12 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
    * A* tries combinations in order and uses the first reachable (non-fallback) result. */
   const routeEdge = (from: string, to: string, step: number): string => {
     if (!byId.has(from) || !byId.has(to)) return ''
+    if (lanesLayout !== null) {
+      const laneId = lanesLayout.laneOf.get(from)
+      const lane = laneId !== undefined ? lanesLayout.laneById.get(laneId) : undefined
+      if (lane === undefined) return ''
+      return routeEdgePath({ layout: lane, obstacles: laneObstacles.get(lane.id) ?? [], occupied: occupiedRef.current, from, to, step })
+    }
     return routeEdgePath({ layout, obstacles, occupied: occupiedRef.current, from, to, step })
   }
 
@@ -618,9 +665,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const branchCount = edges.filter((e) => displayKind(e, degree) === 'branch').length
 
   const nodeCard = (n: SNode): unknown => {
-    const i = layout.colOf.get(n.id) ?? 0
-    const up = layout.sideOf.get(n.id) !== 'down'
-    const top = nodeTop(layout, n.id)
+    const i = (lanesLayout !== null ? (lanesLayout.colOf.get(n.id) ?? 0) : (layout.colOf.get(n.id) ?? 0))
+    const top = lanesLayout !== null ? laneNodeTop(lanesLayout, n.id) : nodeTop(layout, n.id)
     const isDragSrc = drag !== null && drag.moved && drag.from === n.id
     const isSel = selected === n.id
     const deg = degree.get(n.id)
@@ -707,6 +753,182 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   }
 
   const axisY = layout.axisY
+  /* Canvas size: single fishbone vs lane stack. */
+  const canvasW = lanesLayout !== null ? lanesLayout.innerW : layout.innerW
+  const canvasH = lanesLayout !== null ? lanesLayout.innerH : layout.innerH
+
+  /* Spur relay (shared by both render modes): per column/side, sorted by depth, draw
+   * [axis → nearest edge of the shallowest box], [far edge of the previous box → near
+   * edge of the next], etc. — segments never pass through an intermediate box. */
+  const spurLines = (
+    laneNodes: SNode[],
+    topOf: (id: string) => number,
+    colMap: Map<string, number>,
+    sideMap: Map<string, 'up' | 'down'>,
+    depthMap: Map<string, number>,
+    axisYv: number,
+    keyPrefix: string,
+  ): unknown[] => {
+    const groups = new Map<string, { top: number; near: number; far: number; depth: number }[]>()
+    for (const n of laneNodes) {
+      const up = (sideMap.get(n.id) ?? 'up') !== 'down'
+      const depth = depthMap.get(n.id) ?? 0
+      const top = topOf(n.id)
+      const key = String(colMap.get(n.id) ?? 0) + '|' + (up ? 'up' : 'down')
+      const list = groups.get(key) ?? []
+      list.push({ top, near: up ? top + NODE_H : top, far: up ? top : top + NODE_H, depth })
+      groups.set(key, list)
+    }
+    const lines: unknown[] = []
+    let fi = 0
+    for (const [key, list] of groups) {
+      const cx = Number(key.split('|')[0]) * SPACING + SPACING / 2
+      list.sort((a, b) => a.depth - b.depth)
+      let prevY = axisYv
+      for (const b of list) {
+        if (Math.abs(prevY - b.near) > 2) {
+          lines.push(h('line', {
+            key: keyPrefix + 'f' + String(fi++),
+            x1: cx, y1: prevY, x2: cx, y2: b.near,
+            stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
+          }))
+        }
+        prevY = b.far
+      }
+    }
+    return lines
+  }
+
+  /* Single-fishbone SVG children (single-workspace view — geometry unchanged). */
+  const singleSvgChildren = (): unknown[] => [
+    /* Main axis: central horizontal line + end arrow (pointing left when newest-first, arrow at the far left). */
+    h('line', {
+      x1: newestFirst ? layout.innerW - 8 : 8, y1: axisY,
+      x2: newestFirst ? 14 : layout.innerW - 14, y2: axisY,
+      stroke: AXIS, strokeWidth: 1.4, opacity: 0.7,
+      markerEnd: 'url(#st-arrow-axis)',
+    }),
+    /* Date ticks + text (opposite side of the spurs). */
+    ...dateMarks.map((m, i) => h('g', { key: 'd' + String(i) },
+      h('line', {
+        x1: m.x, y1: m.below ? axisY - 4 : axisY, x2: m.x, y2: m.below ? axisY : axisY + 4,
+        stroke: AXIS, strokeWidth: 1.2, opacity: 0.8,
+      }),
+      h('text', {
+        x: m.x, y: m.below ? axisY + 14 : axisY - 6,
+        textAnchor: 'middle',
+        fontSize: 10.5,
+        fontFamily: MONO,
+        fill: AXIS,
+        opacity: 0.85,
+      }, m.date),
+    )),
+    /* Spurs: every node connects vertically, box-centered, to the axis (relay pieces). */
+    ...spurLines(nodes, (id) => nodeTop(layout, id), layout.colOf, layout.sideOf, layout.depthOf, axisY, 's'),
+    /* Native lineage polylines: display kind by merged out-degree — blue = chained handoff,
+     * purple = branch/fan-out (a single-child edge also displays as branch when the parent
+     * has a manual successor). */
+    ...edges.map((e, i) => {
+      if (!layout.colOf.has(e.from) || !layout.colOf.has(e.to)) return null
+      const kind = displayKind(e, degree)
+      const color = kind === 'branch' ? BRANCH : ACCENT
+      return h('path', {
+        key: 'n' + String(i),
+        d: routeEdge(e.from, e.to, i),
+        fill: 'none',
+        stroke: color,
+        strokeWidth: 1.6,
+        markerEnd: kind === 'branch' ? 'url(#st-arrow-branch)' : 'url(#st-arrow-handoff)',
+        opacity: 0.85,
+      })
+    }),
+    /* Manual polylines (dashed orange, arrow entering the target's left side). */
+    ...manualLinks.map((l, i) => {
+      if (!layout.colOf.has(l.from) || !layout.colOf.has(l.to)) return null
+      return h('path', {
+        key: 'm' + String(i),
+        d: routeEdge(l.from, l.to, i + 2),
+        fill: 'none',
+        stroke: MANUAL,
+        strokeWidth: 1.6,
+        strokeDasharray: '6 4',
+        markerEnd: 'url(#st-arrow-manual)',
+        opacity: 0.9,
+      })
+    }),
+    /* Drag ghost line. */
+    drag !== null && drag.moved
+      ? h('line', {
+          x1: colX(layout, drag.from), y1: nodeTop(layout, drag.from) + NODE_H / 2,
+          x2: drag.x, y2: drag.y,
+          stroke: MANUAL, strokeWidth: 1.6, strokeDasharray: '4 4',
+        })
+      : null,
+  ]
+
+  /* Lane-stack SVG children (all-workspaces view): shared date gridlines + canvas-top
+   * labels (consistent ticks across lanes), one fishbone lane per workspace (label +
+   * axis + spurs), edges routed within the endpoints' own lane, drag ghost. */
+  const lanesSvgChildren = (): unknown[] => {
+    const L = lanesLayout
+    if (L === null) return []
+    return [
+      ...laneMarks.map((m, i) => h('g', { key: 'gd' + String(i) },
+        h('line', { x1: m.x, y1: 0, x2: m.x, y2: canvasH, stroke: AXIS, strokeWidth: 1, opacity: 0.13 }),
+        h('text', { x: m.x, y: 16, textAnchor: 'middle', fontSize: 10.5, fontFamily: MONO, fill: AXIS, opacity: 0.85 }, m.date),
+      )),
+      ...L.lanes.map((lane) => h('g', { key: 'lane-' + lane.id },
+        /* Lane label: workspace name + session count, in the lane's box-free top band. */
+        h('text', { x: 8, y: lane.top + 13, fontSize: 10.5, fontFamily: MONO, fontWeight: 600, fill: DIM },
+          bucketTail(lane.id) + t('fmt.count', { count: lane.nodes.length })),
+        /* Lane axis + direction arrow (same rule as the single view). */
+        h('line', {
+          x1: newestFirst ? canvasW - 8 : 8, y1: lane.axisY,
+          x2: newestFirst ? 14 : canvasW - 14, y2: lane.axisY,
+          stroke: AXIS, strokeWidth: 1.4, opacity: 0.7,
+          markerEnd: 'url(#st-arrow-axis)',
+        }),
+        ...spurLines(lane.nodes, (id) => nodeTop(lane, id), lane.colOf, lane.sideOf, lane.depthOf, lane.axisY, lane.id + '|'),
+      )),
+      ...edges.map((e, i) => {
+        if (!L.colOf.has(e.from) || !L.colOf.has(e.to)) return null
+        if (L.laneOf.get(e.from) !== L.laneOf.get(e.to)) return null
+        const kind = displayKind(e, degree)
+        const color = kind === 'branch' ? BRANCH : ACCENT
+        return h('path', {
+          key: 'n' + String(i),
+          d: routeEdge(e.from, e.to, i),
+          fill: 'none',
+          stroke: color,
+          strokeWidth: 1.6,
+          markerEnd: kind === 'branch' ? 'url(#st-arrow-branch)' : 'url(#st-arrow-handoff)',
+          opacity: 0.85,
+        })
+      }),
+      ...manualLinks.map((l, i) => {
+        if (!L.colOf.has(l.from) || !L.colOf.has(l.to)) return null
+        if (L.laneOf.get(l.from) !== L.laneOf.get(l.to)) return null
+        return h('path', {
+          key: 'm' + String(i),
+          d: routeEdge(l.from, l.to, i + 2),
+          fill: 'none',
+          stroke: MANUAL,
+          strokeWidth: 1.6,
+          strokeDasharray: '6 4',
+          markerEnd: 'url(#st-arrow-manual)',
+          opacity: 0.9,
+        })
+      }),
+      drag !== null && drag.moved
+        ? h('line', {
+            x1: (L.colOf.get(drag.from) ?? 0) * SPACING + SPACING / 2,
+            y1: laneNodeTop(L, drag.from) + NODE_H / 2,
+            x2: drag.x, y2: drag.y,
+            stroke: MANUAL, strokeWidth: 1.6, strokeDasharray: '4 4',
+          })
+        : null,
+    ]
+  }
 
   return h('div', {
     style: {
@@ -846,17 +1068,17 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         },
       },
         /* sizer: reserves the zoomed layout size so scroll ranges stay correct. */
-        h('div', { style: { width: layout.innerW * zoom, height: layout.innerH * zoom, overflow: 'hidden' } },
+        h('div', { style: { width: canvasW * zoom, height: canvasH * zoom, overflow: 'hidden' } },
           h('div', {
             ref: innerRef,
             style: {
-              position: 'relative', width: layout.innerW, height: layout.innerH,
+              position: 'relative', width: canvasW, height: canvasH,
               userSelect: 'none', WebkitUserSelect: 'none',
               transform: 'scale(' + String(zoom) + ')', transformOrigin: '0 0',
             },
           },
         h('svg', {
-          width: layout.innerW, height: layout.innerH,
+          width: canvasW, height: canvasH,
           style: { position: 'absolute', inset: 0, pointerEvents: 'none' },
         },
           h('defs', null,
@@ -869,101 +1091,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             h('marker', { id: 'st-arrow-axis', markerWidth: 10, markerHeight: 8, refX: 8, refY: 4, orient: 'auto' },
               h('path', { d: 'M0,0 L9,4 L0,8 z', fill: AXIS })),
           ),
-          /* Main axis: central horizontal line + end arrow (pointing left when newest-first, arrow at the far left). */
-          h('line', {
-            x1: newestFirst ? layout.innerW - 8 : 8, y1: axisY,
-            x2: newestFirst ? 14 : layout.innerW - 14, y2: axisY,
-            stroke: AXIS, strokeWidth: 1.4, opacity: 0.7,
-            markerEnd: 'url(#st-arrow-axis)',
-          }),
-          /* Date ticks + text (opposite side of the spurs). */
-          ...dateMarks.map((m, i) => h('g', { key: 'd' + String(i) },
-            h('line', {
-              x1: m.x, y1: m.below ? axisY - 4 : axisY, x2: m.x, y2: m.below ? axisY : axisY + 4,
-              stroke: AXIS, strokeWidth: 1.2, opacity: 0.8,
-            }),
-            h('text', {
-              x: m.x, y: m.below ? axisY + 14 : axisY - 6,
-              textAnchor: 'middle',
-              fontSize: 10.5,
-              fontFamily: MONO,
-              fill: AXIS,
-              opacity: 0.85,
-            }, m.date),
-          )),
-          /* Spurs: every node connects vertically, box-centered, to the axis.
-           * Segments between the axis and same-column boxes on depth rows are drawn in
-           * relay pieces: per column/side, sorted by depth, draw [axis → nearest edge of
-           * the shallowest box], [far edge of the previous box → near edge of the next], etc. */
-          ...(() => {
-            const groups = new Map()
-            for (const n of nodes) {
-              const up = layout.sideOf.get(n.id) !== 'down'
-              const depth = layout.depthOf.get(n.id) ?? 0
-              const top = nodeTop(layout, n.id)
-              const key = String(layout.colOf.get(n.id) ?? 0) + '|' + (up ? 'up' : 'down')
-              const list = groups.get(key) ?? []
-              list.push({ top, near: up ? top + NODE_H : top, far: up ? top : top + NODE_H, depth })
-              groups.set(key, list)
-            }
-            const lines = []
-            let fi = 0
-            for (const [key, list] of groups) {
-              const cx = Number(key.split('|')[0]) * SPACING + SPACING / 2
-              list.sort((a, b) => a.depth - b.depth)
-              let prevY = axisY
-              for (const b of list) {
-                if (Math.abs(prevY - b.near) > 2) {
-                  lines.push(h('line', {
-                    key: 'f' + String(fi++),
-                    x1: cx, y1: prevY, x2: cx, y2: b.near,
-                    stroke: AXIS, strokeWidth: 1.2, opacity: 0.45,
-                  }))
-                }
-                prevY = b.far
-              }
-            }
-            return lines
-          })(),
-          /* Native lineage polylines: display kind by merged out-degree — blue = chained handoff,
-           * purple = branch/fan-out (a single-child edge also displays as branch when the parent
-           * has a manual successor). */
-          ...edges.map((e, i) => {
-            if (!layout.colOf.has(e.from) || !layout.colOf.has(e.to)) return null
-            const kind = displayKind(e, degree)
-            const color = kind === 'branch' ? BRANCH : ACCENT
-            return h('path', {
-              key: 'n' + String(i),
-              d: routeEdge(e.from, e.to, i),
-              fill: 'none',
-              stroke: color,
-              strokeWidth: 1.6,
-              markerEnd: kind === 'branch' ? 'url(#st-arrow-branch)' : 'url(#st-arrow-handoff)',
-              opacity: 0.85,
-            })
-          }),
-          /* Manual polylines (dashed orange, arrow entering the target's left side). */
-          ...manualLinks.map((l, i) => {
-            if (!layout.colOf.has(l.from) || !layout.colOf.has(l.to)) return null
-            return h('path', {
-              key: 'm' + String(i),
-              d: routeEdge(l.from, l.to, i + 2),
-              fill: 'none',
-              stroke: MANUAL,
-              strokeWidth: 1.6,
-              strokeDasharray: '6 4',
-              markerEnd: 'url(#st-arrow-manual)',
-              opacity: 0.9,
-            })
-          }),
-          /* Drag ghost line. */
-          drag !== null && drag.moved
-            ? h('line', {
-                x1: colX(layout, drag.from), y1: nodeTop(layout, drag.from) + NODE_H / 2,
-                x2: drag.x, y2: drag.y,
-                stroke: MANUAL, strokeWidth: 1.6, strokeDasharray: '4 4',
-              })
-            : null,
+          ...(lanesLayout !== null ? lanesSvgChildren() : singleSvgChildren()),
         ),
         ...nodes.map((n) => nodeCard(n)),
           ),
