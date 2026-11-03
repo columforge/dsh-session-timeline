@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  computeLanesLayout, laneNodeTop, laneColX, TOP_BAND, LANE_GAP,
+  computeLanesLayout, laneNodeTop, laneColX, TOP_BAND, LANE_GAP, COLLAPSED_H,
 } from '../lib/geometry/lanes.js'
 import { SPACING, NODE_H, ROW_GAP, colX } from '../lib/geometry/layout.js'
 
@@ -87,4 +87,26 @@ test('空画布：无节点时给最小宽度、TOP_BAND 高、无泳道', () =>
   assert.deepEqual(L.lanes, [])
   assert.equal(L.innerW, 320)
   assert.equal(L.innerH, TOP_BAND)
+})
+
+test('折叠泳道：细条带高度、节点退出共享刻度、列重排', () => {
+  const ns = [
+    node('a1', 1, 'A'), node('b1', 2, 'B'), node('a2', 3, 'A'), node('c1', 4, 'C'),
+  ]
+  const L = computeLanesLayout(ns, [], [], (n) => n.bucket, new Set(['B']))
+  // B = 细条带：无节点、无列、band 高 = COLLAPSED_H
+  const laneB = L.laneById.get('B')
+  assert.equal(laneB.collapsed, true)
+  assert.equal(laneB.nodes.length, 0)
+  assert.equal(laneB.colOf.size, 0)
+  assert.equal(laneB.innerH, COLLAPSED_H)
+  // B 的节点退出画布与共享刻度；其余列按可见顺序重排（a1=0, a2=1, c1=2）
+  assert.deepEqual(L.nodes.map((n) => n.id), ['a1', 'a2', 'c1'])
+  assert.equal(L.colOf.get('a2'), 1)
+  assert.equal(L.colOf.get('c1'), 2)
+  assert.equal(L.laneOf.has('b1'), false)
+  // 条带堆叠：B 介于 A、C 之间，总高含细条带
+  assert.equal(laneB.top, L.laneById.get('A').top + L.laneById.get('A').innerH + LANE_GAP)
+  const sum = L.lanes.reduce((acc, l) => acc + l.innerH, 0)
+  assert.equal(L.innerH, TOP_BAND + sum + LANE_GAP * (L.lanes.length - 1))
 })

@@ -116,6 +116,34 @@ function subscribeArchiveView(listener: () => void): () => void {
   return () => { archiveView.listeners.delete(listener) }
 }
 
+/** The panel's lane view (all-workspaces canvas): collapsed lane ids + hidden lane ids.
+ *  Panel-ephemeral like sort/archive. Hidden lanes drop out of the canvas and the global
+ *  tab-title count entirely; collapsed lanes render as slim label-only bands whose nodes
+ *  stay out of the shared scale. */
+interface LaneViewState { collapsed: Set<string>; hidden: Set<string> }
+const laneView: { value: LaneViewState; listeners: Set<() => void> } = {
+  value: { collapsed: new Set(), hidden: new Set() },
+  listeners: new Set(),
+}
+function notifyLaneView(): void {
+  for (const listener of [...laneView.listeners]) listener()
+}
+function subscribeLaneView(listener: () => void): () => void {
+  laneView.listeners.add(listener)
+  return () => { laneView.listeners.delete(listener) }
+}
+function toggleLaneSet(kind: 'collapsed' | 'hidden', laneId: string): void {
+  const next = new Set(laneView.value[kind])
+  if (next.has(laneId)) next.delete(laneId)
+  else next.add(laneId)
+  laneView.value = { ...laneView.value, [kind]: next }
+  notifyLaneView()
+}
+function setLanesHidden(ids: Set<string>): void {
+  laneView.value = { ...laneView.value, hidden: ids }
+  notifyLaneView()
+}
+
 /** UI-side panel height cap; geometry constants/pure functions live in ../geometry (unit-tested). */
 const TIMELINE_MAX_H = 420
 
@@ -358,6 +386,11 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     setArchiveModeState(mode)
     setArchiveView(mode)
   }
+  /* Lane view (all-workspaces canvas): click a lane label to collapse/expand; the picker
+   * hides lanes entirely. Mirrors the module store like archive mode. */
+  const [laneV, setLaneVState] = useState(laneView.value)
+  useEffect(() => subscribeLaneView(() => setLaneVState(laneView.value)), [])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [sortBy, setSortBy] = useState<'createdAt' | 'lastAt'>('createdAt')
   const [newestFirst, setNewestFirst] = useState(true)
   const sortedNodes = useMemo(() => {
@@ -377,10 +410,18 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   /* Lane stack for the all-workspaces canvas: one fishbone lane per workspace on a shared
    * ordinal column scale — the same column index maps to the same x in every lane, so the
    * vertical date gridlines align across lanes; lanes stack in first-appearance order. */
-  const lanesLayout = useMemo<LanesLayout<SNode> | null>(
-    () => (isGlobal ? computeLanesLayout(sortedNodes, edges, manualLinks, (n: SNode) => n.bucket) : null),
-    [isGlobal, sortedNodes, edges, manualLinks],
+  /* Hidden lanes drop out entirely; collapsed lanes render as slim bands and occupy no
+   * columns, so the shared scale always covers exactly what the canvas shows. */
+  const visibleNodes = useMemo(
+    () => (isGlobal ? sortedNodes.filter((n) => !laneV.hidden.has(n.bucket)) : sortedNodes),
+    [isGlobal, sortedNodes, laneV],
   )
+  const lanesLayout = useMemo<LanesLayout<SNode> | null>(
+    () => (isGlobal ? computeLanesLayout(visibleNodes, edges, manualLinks, (n: SNode) => n.bucket, laneV.collapsed) : null),
+    [isGlobal, visibleNodes, edges, manualLinks, laneV],
+  )
+  /* Canvas node list: lane mode renders only what the lane stack contains. */
+  const renderNodes = lanesLayout !== null ? lanesLayout.nodes : nodes
 
   /* Zoom: 100% = natural scale; only via the top-left controls (−/+ ±10%, click the percentage to reset),
    * anchored to the viewport center. The wheel never zooms — it yields to native scrolling and browser
@@ -446,7 +487,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       window.removeEventListener('pointercancel', finish)
     }
   }, [panning])
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  const byId = useMemo(() => new Map(sortedNodes.map((n) => [n.id, n])), [sortedNodes])
 
   /* Date ticks: at date changes + first column; text on the side opposite the spurs. */
   const dateMarks = useMemo(() => {
@@ -470,7 +511,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     if (lanesLayout === null) return []
     const marks: { x: number; date: string }[] = []
     let last = ''
-    sortedNodes.forEach((n, i) => {
+    lanesLayout.nodes.forEach((n, i) => {
       const d = fmtDate(displayAt(n))
       if (d !== last || i === 0) {
         marks.push({ x: (lanesLayout.colOf.get(n.id) ?? i) * SPACING + SPACING / 2, date: d })
@@ -478,7 +519,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       }
     })
     return marks
-  }, [sortedNodes, lanesLayout, sortBy])
+  }, [lanesLayout, sortBy])
 
   /* Turn bars of the selected session: horizontal, one bar per turn (first/last larger, handoff-call turns
    * highlighted gold); clicking any bar shows that turn's dialog — first/last/handoff turns ship with /turns,
@@ -660,9 +701,12 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const tail = w.cwd !== null && w.cwd !== '' ? w.cwd.split('/').filter(Boolean).pop() ?? w.cwd : w.bucket
     return tail + t('fmt.count', { count: w.sessions })
   }
-  /* Stats criterion = link display kind (merged out-degree), matching the actual canvas colors. */
-  const handoffCount = edges.filter((e) => displayKind(e, degree) === 'handoff').length
-  const branchCount = edges.filter((e) => displayKind(e, degree) === 'branch').length
+  /* Stats criterion = link display kind (merged out-degree), matching the actual canvas
+   * colors; in lane mode only edges whose both ends are on the canvas count. */
+  const onCanvas = (id: string): boolean => lanesLayout === null || lanesLayout.colOf.has(id)
+  const handoffCount = edges.filter((e) => displayKind(e, degree) === 'handoff' && onCanvas(e.from) && onCanvas(e.to)).length
+  const branchCount = edges.filter((e) => displayKind(e, degree) === 'branch' && onCanvas(e.from) && onCanvas(e.to)).length
+  const manualCount = manualLinks.filter((l) => onCanvas(l.from) && onCanvas(l.to)).length
 
   const nodeCard = (n: SNode): unknown => {
     const i = (lanesLayout !== null ? (lanesLayout.colOf.get(n.id) ?? 0) : (layout.colOf.get(n.id) ?? 0))
@@ -877,19 +921,35 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         h('line', { x1: m.x, y1: 0, x2: m.x, y2: canvasH, stroke: AXIS, strokeWidth: 1, opacity: 0.13 }),
         h('text', { x: m.x, y: 16, textAnchor: 'middle', fontSize: 10.5, fontFamily: MONO, fill: AXIS, opacity: 0.85 }, m.date),
       )),
-      ...L.lanes.map((lane) => h('g', { key: 'lane-' + lane.id },
-        /* Lane label: workspace name + session count, in the lane's box-free top band. */
-        h('text', { x: 8, y: lane.top + 13, fontSize: 10.5, fontFamily: MONO, fontWeight: 600, fill: DIM },
-          bucketTail(lane.id) + t('fmt.count', { count: lane.nodes.length })),
-        /* Lane axis + direction arrow (same rule as the single view). */
-        h('line', {
-          x1: newestFirst ? canvasW - 8 : 8, y1: lane.axisY,
-          x2: newestFirst ? 14 : canvasW - 14, y2: lane.axisY,
-          stroke: AXIS, strokeWidth: 1.4, opacity: 0.7,
-          markerEnd: 'url(#st-arrow-axis)',
-        }),
-        ...spurLines(lane.nodes, (id) => nodeTop(lane, id), lane.colOf, lane.sideOf, lane.depthOf, lane.axisY, lane.id + '|'),
-      )),
+      ...L.lanes.map((lane) => {
+        /* Lane label row: click = collapse/expand (slim band shows just the label).
+         * Collapsed lanes keep their session count from the workspace list. */
+        const labelCount = lane.collapsed
+          ? ((workspaces ?? []).find((w) => w.bucket === lane.id)?.sessions ?? 0)
+          : lane.nodes.length
+        const label = h('text', {
+          key: 'lb',
+          x: 8, y: lane.top + 13,
+          fontSize: 10.5, fontFamily: MONO, fontWeight: 600,
+          fill: lane.collapsed ? DIM : AXIS,
+          style: { cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none', WebkitUserSelect: 'none' },
+          onClick: (): void => toggleLaneSet('collapsed', lane.id),
+        }, (lane.collapsed ? '▸ ' : '▾ ') + bucketTail(lane.id) + t('fmt.count', { count: labelCount }))
+        if (lane.collapsed) {
+          return h('g', { key: 'lane-' + lane.id }, [label])
+        }
+        return h('g', { key: 'lane-' + lane.id }, [
+          label,
+          /* Lane axis + direction arrow (same rule as the single view). */
+          h('line', {
+            x1: newestFirst ? canvasW - 8 : 8, y1: lane.axisY,
+            x2: newestFirst ? 14 : canvasW - 14, y2: lane.axisY,
+            stroke: AXIS, strokeWidth: 1.4, opacity: 0.7,
+            markerEnd: 'url(#st-arrow-axis)',
+          }),
+          ...spurLines(lane.nodes, (id) => nodeTop(lane, id), lane.colOf, lane.sideOf, lane.depthOf, lane.axisY, lane.id + '|'),
+        ])
+      }),
       ...edges.map((e, i) => {
         if (!L.colOf.has(e.from) || !L.colOf.has(e.to)) return null
         if (L.laneOf.get(e.from) !== L.laneOf.get(e.to)) return null
@@ -1008,8 +1068,67 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         h('option', { value: 'all' }, t('header.archiveShowAll')),
         h('option', { value: 'hide' }, t('header.archiveHide')),
       ),
+      /* Lane picker (all-workspaces canvas): checkboxes hide/show lanes entirely. */
+      lanesLayout !== null ? h('span', { style: { position: 'relative' } },
+        h(P.Button, {
+          variant: 'ghost', size: 'sm',
+          onClick: (): void => setPickerOpen((o) => !o),
+        }, t('header.laneFilter') + (laneV.hidden.size > 0
+          ? ' ' + String(lanesLayout.lanes.length) + '/' + String(lanesLayout.lanes.length + laneV.hidden.size)
+          : '')),
+        pickerOpen ? h('div', {
+          style: {
+            position: 'absolute', top: '100%', left: 0, zIndex: 80,
+            minWidth: 230, maxHeight: 280, overflowY: 'auto',
+            background: 'var(--dsw-alias-surface-overlay, var(--dsw-alias-surface-primary, #1a1c20))',
+            border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.35))',
+            borderRadius: 8, padding: '6px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+          },
+        },
+          (() => {
+            /* Row candidates = the workspace list first (sorted by newest), then any
+             * hidden id it does not cover (defensive for stale workspace lists). */
+            const rowIds: string[] = []
+            const seenRow = new Set<string>()
+            for (const w of (workspaces ?? [])) {
+              if (!seenRow.has(w.bucket)) { seenRow.add(w.bucket); rowIds.push(w.bucket) }
+            }
+            for (const id of laneV.hidden) {
+              if (!seenRow.has(id)) { seenRow.add(id); rowIds.push(id) }
+            }
+            return rowIds.map((id) => {
+              const w = (workspaces ?? []).find((x) => x.bucket === id)
+              return h('label', {
+                key: id,
+                style: { display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', cursor: 'pointer', fontSize: 12 },
+              },
+                h('input', {
+                  type: 'checkbox',
+                  checked: !laneV.hidden.has(id),
+                  onChange: (): void => toggleLaneSet('hidden', id),
+                }),
+                h('span', null, bucketTail(id)),
+                w !== undefined ? h('span', { style: { color: DIM, fontFamily: MONO, marginLeft: 'auto' } }, String(w.sessions)) : null,
+              )
+            })
+          })(),
+          h('div', {
+            style: { display: 'flex', gap: 4, borderTop: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.25))', paddingTop: 6, marginTop: 4 },
+          },
+            h(P.Button, { variant: 'ghost', size: 'sm', onClick: (): void => setLanesHidden(new Set()) }, t('header.laneAll')),
+            h(P.Button, {
+              variant: 'ghost', size: 'sm',
+              onClick: (): void => setLanesHidden(new Set((workspaces ?? []).map((w) => w.bucket))),
+            }, t('header.laneNone')),
+            h(P.Button, {
+              variant: 'ghost', size: 'sm',
+              onClick: (): void => setLanesHidden(new Set((workspaces ?? []).filter((w) => w.bucket !== sessionBucketRef.current).map((w) => w.bucket))),
+            }, t('header.laneOnlyCurrent')),
+          ),
+        ) : null,
+      ) : null,
       h('span', null,
-        t('stats.summary', { sessions: nodes.length, handoff: handoffCount, branch: branchCount, manual: manualLinks.length }) +
+        t('stats.summary', { sessions: renderNodes.length, handoff: handoffCount, branch: branchCount, manual: manualCount }) +
         ((snap.sessions ?? []).some((n) => n.archived === true)
           ? ' · ' + t('stats.archived', { count: (snap.sessions ?? []).filter((n) => n.archived === true).length })
           : '') +
@@ -1093,7 +1212,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           ),
           ...(lanesLayout !== null ? lanesSvgChildren() : singleSvgChildren()),
         ),
-        ...nodes.map((n) => nodeCard(n)),
+        ...renderNodes.map((n) => nodeCard(n)),
           ),
         ),
       ),
@@ -1110,6 +1229,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           legendRow(t('legend.groupCanvas'), [
             legendItem(t('legend.action.wheel'), t('legend.meaning.scroll')),
             legendItem(t('legend.action.zoom'), t('legend.meaning.zoomControls')),
+            legendItem(t('legend.action.laneToggle'), t('legend.meaning.laneToggle')),
           ]),
           legendRow(t('legend.groupLineage'), [
             h('span', { key: 'def' }, t('legend.lineageDefinition')),
@@ -1313,6 +1433,9 @@ function TabTitle(props: { sessionId?: string; t?: Translate }): unknown {
   /* Archive mode mirrors the panel body so the title count matches what the canvas shows. */
   const [archMode, setArchMode] = useState<ArchiveMode>(archiveView.value)
   useEffect(() => subscribeArchiveView(() => setArchMode(archiveView.value)), [])
+  /* Hidden lanes (global view) drop out of the title count like they drop off the canvas. */
+  const [laneV, setLaneVState] = useState(laneView.value)
+  useEffect(() => subscribeLaneView(() => setLaneVState(laneView.value)), [])
 
   useEffect(() => {
     const workspace = bucket ?? undefined
@@ -1323,7 +1446,8 @@ function TabTitle(props: { sessionId?: string; t?: Translate }): unknown {
       fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
         .then((r) => r.json())
         .then((data: Snapshot) => setCount(data?.ok === true
-          ? (data.sessions ?? []).filter((n) => !(archMode === 'hide' && n.archived === true)).length
+          ? (data.sessions ?? []).filter((n) => !(archMode === 'hide' && n.archived === true)
+            && !(bucket === '__global__' && laneV.hidden.has(n.bucket))).length
           : 0))
         .catch(() => { /* keep the previous count */ })
         .finally(() => clearTimeout(tid))
@@ -1331,7 +1455,7 @@ function TabTitle(props: { sessionId?: string; t?: Translate }): unknown {
     tick()
     const iv = setInterval(tick, 12000)
     return () => clearInterval(iv)
-  }, [bucket, sessionId, archMode])
+  }, [bucket, sessionId, archMode, laneV])
 
   return h('span', null, t('panel.title') + (count > 0 ? t('fmt.count', { count }) : ''))
 }

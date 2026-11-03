@@ -56,6 +56,8 @@ Then enter this directory as the local path in "Add plugin".
 - The workspace dropdown gains "**All workspaces**": one fishbone lane per workspace, stacked vertically; all lanes share ONE horizontal scale — the same column maps to the same x in every lane, and vertical date gridlines align across lanes for cross-workspace comparison
 - Lane order follows the current sort/direction (by default the lane with the newest session sits on top); each lane is labeled with its workspace name + session count, and node cards still carry the workspace tag
 - Lineage (native handoff/branch, manual links) never crosses workspaces; edges route within their own lane; in the all-workspaces view a manual drag only links two sessions of the same workspace — cross-workspace pairs are rejected with a localized error (`crossWorkspace`)
+- **Lane collapse**: click a lane name (`▸`/`▾` prefix) to collapse/expand it; a collapsed lane is a slim label-only band and its sessions stay out of the shared scale
+- **Lane filter**: the header "Lane filter" picker checks which workspaces to show (all / none / only the current workspace); hidden lanes drop off the canvas and the tab-title count entirely
 - Tab-title count and header stats follow the current view (single workspace / all)
 
 ### Ordering and direction

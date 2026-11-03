@@ -12,6 +12,8 @@
  * manual links never cross workspaces). Lane bands stack vertically: a canvas
  * top band holds the shared date labels; each band keeps its own label row
  * (workspace name) in the box-free DATE_BAND headroom of its topmost nodes.
+ * Collapsed lanes (collapsed set) render as slim label-only bands: their nodes
+ * stay out of the shared scale, so the grid covers visible lanes only.
  */
 import {
   computeLayout, SPACING, GAP, NODE_H, ROW_GAP,
@@ -22,12 +24,16 @@ import {
 export const TOP_BAND = 26
 /** Vertical gap between consecutive lane bands. */
 export const LANE_GAP = 26
+/** Band height of a collapsed lane (label row only, no fishbone content). */
+export const COLLAPSED_H = 28
 
 export interface Lane<T extends LayoutNode = LayoutNode> extends Layout<T> {
   /** Lane id (the workspace bucket). */
   id: string
   /** Absolute canvas y of the lane band's top (lane label baseline sits at top + 13). */
   top: number
+  /** Collapsed lane: slim label-only band; nodes/columns stay out of the shared scale. */
+  collapsed: boolean
 }
 
 export interface LanesLayout<T extends LayoutNode = LayoutNode> {
@@ -48,10 +54,18 @@ export function computeLanesLayout<T extends LayoutNode>(
   edges: LayoutEdge[],
   manualLinks: LayoutManualLink[],
   laneOfNode: (n: T) => string,
+  /** Ids of lanes to render as slim collapsed bands (their nodes stay out of the scale). */
+  collapsed?: Set<string>,
 ): LanesLayout<T> {
-  /* Shared scale: global columns by display order (same rule as the single view). */
+  /* Shared scale: global columns by display order (same rule as the single view),
+   * covering visible (non-collapsed) lanes only — collapsed lanes occupy no columns. */
   const colOf = new Map<string, number>()
-  nodesIn.forEach((n, i) => { colOf.set(n.id, i) })
+  let ci = 0
+  for (const n of nodesIn) {
+    if (collapsed !== undefined && collapsed.has(laneOfNode(n))) continue
+    colOf.set(n.id, ci)
+    ci += 1
+  }
 
   /* Group per lane, preserving display order; lane stacking order = first appearance. */
   const laneIds: string[] = []
@@ -68,6 +82,20 @@ export function computeLanesLayout<T extends LayoutNode>(
   const lanes: Lane<T>[] = []
   let y = TOP_BAND
   for (const laneId of laneIds) {
+    if (collapsed !== undefined && collapsed.has(laneId)) {
+      /* Collapsed lane: slim label-only band; its nodes stay out of nodes/colOf/laneOf
+       * (the shared scale covers visible lanes only, so gridlines keep their meaning). */
+      const lane: Lane<T> = {
+        nodes: [], colOf: new Map(), sideOf: new Map(), depthOf: new Map(),
+        axisY: y + COLLAPSED_H, innerW: 0, innerH: COLLAPSED_H, maxDepth: 0,
+        corridorUp: y, corridorDown: y + COLLAPSED_H,
+        id: laneId, top: y, collapsed: true,
+      }
+      laneById.set(laneId, lane)
+      lanes.push(lane)
+      y += COLLAPSED_H + LANE_GAP
+      continue
+    }
     const laneNodes = byLane.get(laneId) ?? []
     const member = new Set(laneNodes.map((n) => n.id))
     /* Native edges / manual links stay within one workspace; the filter also
@@ -82,6 +110,7 @@ export function computeLanesLayout<T extends LayoutNode>(
       ...base,
       id: laneId,
       top: y,
+      collapsed: false,
       colOf: laneColOf,
       axisY: base.axisY + y,
       corridorUp: base.corridorUp + y,
@@ -93,13 +122,14 @@ export function computeLanesLayout<T extends LayoutNode>(
     y += base.innerH + LANE_GAP
   }
 
+  const gridNodes = nodesIn.filter((n) => !(collapsed !== undefined && collapsed.has(laneOfNode(n))))
   return {
-    nodes: nodesIn,
+    nodes: gridNodes,
     colOf,
     laneOf,
     laneById,
     lanes,
-    innerW: Math.max(nodesIn.length * SPACING + 24, 320),
+    innerW: Math.max(gridNodes.length * SPACING + 24, 320),
     innerH: laneIds.length > 0 ? y - LANE_GAP : TOP_BAND,
   }
 }
