@@ -16,7 +16,7 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 | Handoff hints | Purple frame = used the handoff skill, no predecessor (awaiting one); gold frame = any handoff invocation, no successor (awaiting one) |
 | Archived sessions | Header display switch: **show all sessions** (default; archived boxes dashed with an "Archived" tag) / **hide archived sessions** |
 | Detail pane + turn strip | Click a node for details; a strip of turn bars pages through the full conversation with handoff turns highlighted in gold |
-| Workspace switch | Header dropdown switches session buckets; "current session workspace" auto-follows; tab shows the live top-level session count |
+| Workspace switch | Header dropdown switches session buckets; the current session's workspace shows by name; "All workspaces" draws every workspace onto one canvas (nodes carry their workspace tag); tab shows the live top-level session count |
 | One-click jump | Double-click a node (or the detail button) to open that session, across workspaces |
 | UI language | Follows the language configured in DSH (中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português), switching live |
 
@@ -50,6 +50,12 @@ Then enter this directory as the local path in "Add plugin".
 - **Zoom**: the `− N% +` control, top-left (±10% steps, 10%–300%, anchored at the viewport center; click N% to reset to 100%)
 - **Wheel**: native browser scrolling (vertical/horizontal); Ctrl+wheel stays the browser zoom — the panel never hijacks it
 - **Pan**: drag on empty canvas (grab → grabbing); dragging on a node creates a manual link
+
+### All workspaces on one canvas
+
+- The workspace dropdown gains "**All workspaces**": every workspace's sessions merge onto one timeline, with the workspace named on each node card and in the detail pane
+- Lineage (native handoff/branch, manual links) never crosses workspaces; in the all-workspaces view a manual drag only links two sessions of the same workspace — cross-workspace pairs are rejected with a localized error (`crossWorkspace`)
+- Tab-title count and header stats follow the current view (single workspace / all)
 
 ### Ordering and direction
 
@@ -93,8 +99,8 @@ Then enter this directory as the local path in "Add plugin".
 | `GET /workspaces` | Workspace list `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
 | `GET /list?workspace=<bucket\|__global__>&session=<id>` | Nodes (+ `archived` flag) + native edges + manual links |
 | `GET /turns?session=<id>&workspace=<bucket>&turn=N` | Turn details (`&turn=N` fetches a single turn) |
-| `POST /link` `{workspace?, session?, from, to}` | Create a manual link (direction normalized by creation time, idempotent) |
-| `POST /unlink` `{workspace?, session?, from, to}` | Remove a manual link (matched both ways) |
+| `POST /link` `{workspace?, session?, from, to}` | Create a manual link (direction normalized by creation time, idempotent); with `workspace=__global__` each endpoint resolves back to its own bucket — cross-workspace pairs fail with `crossWorkspace` |
+| `POST /unlink` `{workspace?, session?, from, to}` | Remove a manual link (matched both ways); with `workspace=__global__` the link's own bucket is resolved from the endpoints |
 
 Error responses carry `{ ok: false, error, code, params? }`: `error` keeps the Chinese text (old clients/logs), while `code` is a stable machine id the UI translates into the configured language (e.g. `workspaceMissing`, `nativeHandoff`, `storageWrite`). `/turns` entries add `userClipped` / `assistantClipped` / `assistantReasoning` flags; the clip/reasoning markers render client-side in that language.
 

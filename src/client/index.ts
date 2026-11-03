@@ -17,8 +17,13 @@
  * predecessor); any handoff invocation with no successor → gold frame
  * (awaiting successor); the detail pane lists each invocation's
  * turn/time/message seq.
- * Double-click a node = switch to that session; the header "global timeline"
- * toggle aggregates all workspaces.
+ * Double-click a node = switch to that session. The workspace select carries a
+ * third mode "all workspaces" (the __global__ sentinel): every workspace's
+ * sessions land on one canvas, each node tagged with its workspace name;
+ * lineage (native + manual) never crosses workspaces — the host resolves each
+ * dragged pair back to its own bucket and rejects cross-workspace pairs with
+ * a localized error. The "follow current session" option shows the current
+ * workspace's name instead of a generic label.
  * Archive display (header select, two modes over the host-stamped `archived`
  * flag): "show all" (default = current behavior) draws archived session boxes
  * with dashed borders plus an archived tag; "hide archived" filters archived
@@ -57,6 +62,8 @@ const POLL_MS = 8000
 const FETCH_TIMEOUT_MS = 15000
 const TAB_ID = '@dsh-external/session-timeline'
 const TAB_KIND = 'session-timeline'
+/** All-workspaces canvas sentinel — mirrors the host's GLOBAL_BUCKET (/list|/link|/unlink accept it). */
+const GLOBAL_WORKSPACE = '__global__'
 
 /** {name} placeholder interpolation (same semantics as LocaleRuntime.translate). */
 function interpolate(template: string, params?: Record<string, unknown>): string {
@@ -361,6 +368,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const edges = snap?.edges ?? []
   const manualLinks = snap?.manualLinks ?? []
   const displayAt = (n: SNode): number => (sortBy === 'createdAt' ? n.createdAt : n.lastAt)
+  /* All-workspaces canvas: every node carries a workspace-name tag (lineage stays per workspace). */
+  const isGlobal = workspace === GLOBAL_WORKSPACE
 
   /* Zoom: 100% = natural scale; only via the top-left controls (−/+ ±10%, click the percentage to reset),
    * anchored to the viewport center. The wheel never zooms — it yields to native scrolling and browser
@@ -692,6 +701,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         nudgeLast ? h(P.Tag, { tone: 'warning' }, t('node.tag.awaitChild')) : null,
         n.parent !== null && !byId.has(n.parent) ? h(P.Tag, { tone: 'quiet' }, t('node.tag.externalParent')) : null,
         n.archived === true ? h(P.Tag, { tone: 'quiet' }, t('node.tag.archived')) : null,
+        isGlobal ? h(P.Tag, { tone: 'quiet' }, bucketTail(n.bucket)) : null,
       ),
     )
   }
@@ -719,9 +729,13 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           setWorkspace(ev.target.value === '' ? undefined : ev.target.value)
         },
       },
-        h('option', { value: '' }, t('header.workspaceCurrent')),
+        /* First option = follow the current session's bucket, labeled with the workspace
+         * name once it is known (generic label only before the bucket is located). */
+        h('option', { value: '' }, sessionBucketRef.current !== undefined ? bucketTail(sessionBucketRef.current) : t('header.workspaceCurrent')),
+        /* All-workspaces canvas: every workspace's sessions on one fishbone. */
+        h('option', { value: GLOBAL_WORKSPACE }, t('header.workspaceAll')),
         ...(workspaces ?? [])
-          .filter((w) => w.bucket !== sessionBucketRef.current)
+          .filter((w) => w.bucket !== sessionBucketRef.current && w.bucket !== GLOBAL_WORKSPACE)
           .map((w) => h('option', { key: w.bucket, value: w.bucket, title: w.cwd ?? w.bucket }, wsLabel(w))),
       ),
       h('select', {

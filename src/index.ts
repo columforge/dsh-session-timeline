@@ -14,6 +14,10 @@
  *   GET  /list?session=…&workspace=…  nodes (+archived flag) + native edges + manual links
  *   POST /link   { session?, workspace?, from, to }
  *   POST /unlink { session?, workspace?, from, to }
+ * workspace=__global__ (all-workspaces canvas) is accepted by /list to
+ * aggregate every bucket, and by /link and /unlink — there each endpoint is
+ * resolved back to its own bucket (lineage never crosses workspaces; a
+ * cross-workspace link pair fails with the stable `crossWorkspace` code).
  * Error responses carry { ok:false, error:<zh text>, code, params? }: `code` is
  * stable and rendered client-side in the language configured in DSH; /turns
  * entries add userClipped / assistantClipped / assistantReasoning flags so
@@ -103,7 +107,8 @@ interface Doc {
 
 const SESSION_FILE = 'session.v4.jsonl.zstd'
 const ZSTD_MAGIC = 0xFD2FB528
-/** Sentinel bucket name for the global timeline (/list?workspace=__global__ aggregates all). */
+/** Sentinel bucket name for the global timeline (/list?workspace=__global__ aggregates all;
+ *  /link and /unlink resolve each endpoint back to its own bucket). */
 export const GLOBAL_BUCKET = '__global__'
 
 /* ---- zstd frame scan (same semantics as harness session-persistence-jsonl; tolerates torn trailing frames) ---- */
@@ -494,7 +499,24 @@ export function apply(ctx: Context, config: Config): void {
         const to = typeof body.to === 'string' ? body.to.trim() : ''
         if (from === '' || to === '') { json(res, 400, failPayload({ code: 'emptyFromTo', text: 'from/to 不能为空' })); return }
         if (from === to) { json(res, 400, failPayload({ code: 'linkSelf', text: '不能与自己衔接' })); return }
-        const { nodes } = listBucketNodes(located.bucket)
+        /* Global view (__global__): resolve each endpoint's own bucket — lineage never
+         * crosses workspaces, so a cross-workspace pair fails with a stable code. */
+        let bucket = located.bucket
+        if (bucket === GLOBAL_BUCKET) {
+          const fromBucket = sessionBucket(from)
+          const toBucket = sessionBucket(to)
+          if (fromBucket === null || toBucket === null) {
+            const missing = fromBucket === null ? from : to
+            json(res, 400, failPayload({ code: 'sessionNotInBucket', text: '会话 ' + missing + ' 不在任何工作区存储桶', params: { session: missing } }))
+            return
+          }
+          if (fromBucket !== toBucket) {
+            json(res, 400, failPayload({ code: 'crossWorkspace', text: '两会话分属不同工作区，手工衔接不能跨工作区' }))
+            return
+          }
+          bucket = fromBucket
+        }
+        const { nodes } = listBucketNodes(bucket)
         const byId = new Map(nodes.map((n) => [n.id, n]))
         const a = byId.get(from)
         const b = byId.get(to)
@@ -515,12 +537,12 @@ export function apply(ctx: Context, config: Config): void {
         // time, falling back to header.createdAt — same direction as native
         // parent→child (older points to newer).
         const [nf, nt] = a.createdAt <= b.createdAt ? [from, to] : [to, from]
-        const doc = loadDoc(root, located.bucket)
+        const doc = loadDoc(root, bucket)
         if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         const dup = doc.doc.links.some((l) => (l.from === nf && l.to === nt) || (l.from === nt && l.to === nf))
         if (dup) { json(res, 200, { ok: true, duplicate: true }); return }
         doc.doc.links.push({ from: nf, to: nt, created_at: new Date().toISOString() })
-        const err = saveDoc(root, located.bucket, doc.doc)
+        const err = saveDoc(root, bucket, doc.doc)
         if (err !== null) { json(res, 500, failPayload(err)); return }
         json(res, 200, { ok: true, from: nf, to: nt })
         return
@@ -537,13 +559,23 @@ export function apply(ctx: Context, config: Config): void {
         const from = typeof body.from === 'string' ? body.from.trim() : ''
         const to = typeof body.to === 'string' ? body.to.trim() : ''
         if (from === '' || to === '') { json(res, 400, failPayload({ code: 'emptyFromTo', text: 'from/to 不能为空' })); return }
-        const doc = loadDoc(root, located.bucket)
+        /* Global view (__global__): resolve the link's own bucket from either endpoint. */
+        let bucket = located.bucket
+        if (bucket === GLOBAL_BUCKET) {
+          const own = sessionBucket(from) ?? sessionBucket(to)
+          if (own === null) {
+            json(res, 400, failPayload({ code: 'sessionNotInBucket', text: '会话 ' + from + ' 不在任何工作区存储桶', params: { session: from } }))
+            return
+          }
+          bucket = own
+        }
+        const doc = loadDoc(root, bucket)
         if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         const before = doc.doc.links.length
         doc.doc.links = doc.doc.links.filter((l) => !((l.from === from && l.to === to) || (l.from === to && l.to === from)))
         const removed = before - doc.doc.links.length
         if (removed > 0) {
-          const err = saveDoc(root, located.bucket, doc.doc)
+          const err = saveDoc(root, bucket, doc.doc)
           if (err !== null) { json(res, 500, failPayload(err)); return }
         }
         json(res, 200, { ok: true, removed })

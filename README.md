@@ -16,7 +16,7 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 | handoff 待接提示 | 紫框 = 调用过 handoff skill 且无前驱（待接前驱）；金框 = 出现过 handoff 调用且无后继（待接后继） |
 | 归档会话显示 | 头部切换「**显示全部会话**（默认，归档框虚线 + 归档标签）/ **隐藏归档会话**」，归档状态来自工作区注册表归档集 |
 | 详情区 + 轮次条 | 点击节点查看会话详情；一排轮次横条翻看完整对话，handoff 调用轮金色高亮 |
-| 工作区切换 | 顶部下拉切换会话桶，「当前会话工作区」自动跟随；页签计数实时显示顶层会话数 |
+| 工作区切换 | 顶部下拉切换会话桶，当前会话所在工作区直接以名称显示；「所有工作区」把全部工作区画进同一张画布（节点标注所属工作区）；页签计数实时显示顶层会话数 |
 | 一键跳转 | 双击节点（或详情区按钮）直接切换到该会话，跨工作区生效 |
 | 界面语言 | 跟随 DSH 设置的语言（中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português）即时切换 |
 
@@ -50,6 +50,12 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 - **缩放**：左上角 `− N% +` 控件（±10%，10%~300%，围绕视口中心锚定；点击 N% 复位 100%）
 - **滚轮**：浏览器原生滚动（上下/左右），面板不拦截；Ctrl+滚轮 = 浏览器整体缩放
 - **平移**：画布空白处按住左键拖拽（grab → grabbing）；在节点上拖拽 = 建立手工衔接连线
+
+### 所有工作区一画布
+
+- 工作区下拉新增「**所有工作区**」：全部工作区的会话合到同一条时间线上，节点卡片与详情区都标注所属工作区
+- 血缘（原生 handoff / 分支、手工衔接）不跨工作区；全局视图下手工拖拽仅对同一工作区的两会话生效，跨工作区拖拽会提示错误（`crossWorkspace`）
+- 页签计数与头部统计跟随当前视图（单工作区 / 全部）
 
 ### 排序与方向
 
@@ -93,8 +99,8 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 | `GET /workspaces` | 工作区清单 `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
 | `GET /list?workspace=<桶\|__global__>&session=<id>` | 节点（含 `archived` 标记）+ 原生边 + 手工衔接清单 |
 | `GET /turns?session=<id>&workspace=<桶>&turn=N` | 轮次明细（`&turn=N` 单轮按需取） |
-| `POST /link` `{workspace?, session?, from, to}` | 建立手工衔接（按创建时间归一定向，幂等） |
-| `POST /unlink` `{workspace?, session?, from, to}` | 删除手工衔接（双向匹配） |
+| `POST /link` `{workspace?, session?, from, to}` | 建立手工衔接（按创建时间归一定向，幂等）；`workspace=__global__` 时按端点解析回各自工作区，跨工作区对报 `crossWorkspace` |
+| `POST /unlink` `{workspace?, session?, from, to}` | 删除手工衔接（双向匹配）；`workspace=__global__` 时按端点解析回所属工作区 |
 
 错误响应统一带 `{ ok: false, error, code, params? }`：`error` 是中文原文（兼容旧客户端/日志），`code` 为稳定机器码，界面按当前语言翻译（如 `workspaceMissing`、`nativeHandoff`、`storageWrite`）。`/turns` 的轮次对象附带 `userClipped` / `assistantClipped` / `assistantReasoning` 标志位，截断与推理标记由前端按语言渲染。
 
