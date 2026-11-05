@@ -22,13 +22,24 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 
 ## 安装
 
-前置：已安装并运行 DSH（DeepSeek Harness）。
+前置：已安装并运行 DSH（DeepSeek Harness ≥ v0.1.3-alpha.1，见 [DSH 版本支持](#dsh-版本支持)）。
 
-打开 DSH 的**插件页 → 添加插件**，按下列任一方式安装：
+**推荐：市场索引（git 源，免 npm）**——在 DSH **插件页 → 发现** 添加索引 URL：
 
-1. **npm 包名**（**尚未上架**：公共 npm 查询 `@dsh-external/session-timeline` 现返回 404；上架后按版本号填写即可，见 [发布渠道](#发布渠道)）
-2. **Release 压缩包**（立即可用）：从 [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases) 下载 `.tgz`，解压后填入**解压目录的本地路径**
-3. **源码构建**（开发者）：
+```
+https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json
+```
+
+列表中的 0.0.34 即 git 源条目（钉在固定 commit，安装走 DSH 的 bundle 通道）。也可直接命令行安装（`<commit>` 取 `market-index.json` 的 `source.commit`）：
+
+```bash
+dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
+```
+
+其余方式：
+
+1. **Release 压缩包**：从 [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases) 下载 `.tgz`，解压后把**解压目录的本地路径**填进「添加插件」
+2. **源码构建**（开发者）：
 
 ```bash
 git clone https://github.com/columforge/dsh-session-timeline.git
@@ -37,6 +48,8 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 ```
 
 然后把本目录填入「添加插件」的本地路径。
+
+npm 渠道未启用：本插件以 git 分发（`lib/` 已随仓库提交，`dsh.bundle` 补丁在仓库根，安装时无需构建）。
 
 ## DSH 版本支持
 
@@ -146,9 +159,9 @@ npm test         # pretest 自动 build，再跑全部单测
 
 ## 发布渠道
 
-- **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（含构建好的 `lib/`，解压即装）——**当前唯一分发包**
-- **npm**（未上架）：公共 npm 尚未发布本包（查询 `@dsh-external/session-timeline` 返回 404）；peer 依赖均在公共 npm，具备直接发布条件，上架后 README 与市场索引随之切换
-- **插件市场索引**：`market-index.json` 为市场格式 1 索引（版本号、安装源、`engines.dsh` 最低 DSH 版本）；npm 上架前其 npm 源条目不可安装、仅作版本目录。在 DSH「发现」页添加本仓库 raw URL 即可浏览
+- **git 源（主渠道）**：`market-index.json` 的版本条目使用 `source.type: git`，钉在 GitHub 仓库的固定 commit；DSH 插件管理器直接以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
+- **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（解压即装的本地目录形态，也便于离线分发）
+- **npm**：未启用（公共 registry 无此包）。注意：社区目录（如 awesome-dsh-plugin）的 `index.json` 由脚本**仅从 npm 数据生成**，无 npm 包的条目会被跳过——git-only 插件不会出现在这些目录的 DSH 发现页；请使用上面的自托管 market-index URL
 
 ## 许可证
 

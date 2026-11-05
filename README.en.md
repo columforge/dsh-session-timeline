@@ -22,13 +22,24 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 
 ## Installation
 
-Prerequisite: DSH (DeepSeek Harness) installed and running.
+Prerequisite: DSH (DeepSeek Harness) ≥ v0.1.3-alpha.1, installed and running (see [DSH version support](#dsh-version-support)).
 
-Open the DSH **Plugins page → Add plugin**, then use any of:
+**Recommended: market index (git source, no npm)** — in the DSH **Plugins → Discover** tab, add this index URL:
 
-1. **npm package name** (**not published yet**: `@dsh-external/session-timeline` currently returns 404 on the public npm registry; enter the version spec once it ships — see [Distribution](#distribution))
-2. **Release tarball** (works today): download the `.tgz` from [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases), extract it, and enter the extracted directory as a **local path**
-3. **Build from source** (developers):
+```
+https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json
+```
+
+Version 0.0.34 there is a git-source entry pinned to a fixed commit; installing goes through DSH's bundle path. Or install from the command line directly (`<commit>` = `source.commit` in `market-index.json`):
+
+```bash
+dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
+```
+
+Other options:
+
+1. **Release tarball**: download the `.tgz` from [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases), extract it, and enter the extracted directory as a **local path** under "Add plugin"
+2. **Build from source** (developers):
 
 ```bash
 git clone https://github.com/columforge/dsh-session-timeline.git
@@ -37,6 +48,8 @@ npm run build        # needs DSH_CHECKOUT pointing at a DSH source checkout (see
 ```
 
 Then enter this directory as the local path in "Add plugin".
+
+npm is not used: this plugin ships over git (`lib/` is committed, the `dsh.bundle` patch lives at the repo root, and installation needs no build).
 
 ## DSH version support
 
@@ -146,9 +159,9 @@ When touching the A*/layout geometry, read the "three historical pitfalls" comme
 
 ## Distribution
 
-- **GitHub Releases**: every version ships an `npm pack` tgz (with the built `lib/`, extract and install) — **the only distribution channel today**
-- **npm** (not published): the public registry still returns 404 for this package; all peer dependencies are on public npm, so publishing is ready to go, and README plus market index switch once it ships
-- **Plugin market index**: `market-index.json` is a format-1 index (versions, install source, `engines.dsh` minimum DSH version); before npm publication its npm-sourced entries are not installable and serve as a version catalog only. Add this repo's raw URL in the DSH Discover tab to browse
+- **git source (primary channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; the DSH plugin manager installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)
+- **GitHub Releases**: every version ships an `npm pack` tgz (an extract-and-install local directory, also useful for offline distribution)
+- **npm**: not used (the public registry has no such package). Note: community catalogs such as awesome-dsh-plugin build their `index.json` **from npm data only**, so entries without an npm package are skipped — a git-only plugin will not appear in those catalogs' DSH Discover pages; use the self-hosted market-index URL above
 
 ## License
 

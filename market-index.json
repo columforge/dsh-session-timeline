@@ -49,54 +49,16 @@
       },
       "versions": [
         {
-          "version": "0.0.33",
-          "publishTimestamp": 1793870936,
+          "version": "0.0.34",
+          "publishTimestamp": 1793872002,
           "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/columforge/dsh-session-timeline",
+            "commit": "0329fc98599cd1b95b576d007294011e99b275a7"
           },
           "engines": {
             "dsh": ">=0.1.3-alpha.1 <2.0.0"
           }
-        },
-        {
-          "version": "0.0.31",
-          "publishTimestamp": 1793726642,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {}
-        },
-        {
-          "version": "0.0.30",
-          "publishTimestamp": 1793725193,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {}
-        },
-        {
-          "version": "0.0.29",
-          "publishTimestamp": 1793723622,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {}
-        },
-        {
-          "version": "0.0.28",
-          "publishTimestamp": 1793353450,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {}
-        },
-        {
-          "version": "0.0.27",
-          "publishTimestamp": 0,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {}
         }
       ]
     }
