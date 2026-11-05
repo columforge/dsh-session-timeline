@@ -1,3 +1,5 @@
 node_modules/
-lib/
+# Built lib/ is committed on purpose: DSH installs this plugin from git, and the
+# profile launcher loads lib/index.js directly — end users have no DSH source
+# checkout to run scripts/build.sh.
 *.tgz

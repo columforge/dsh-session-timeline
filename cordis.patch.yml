@@ -1,0 +1,12 @@
+# Session Timeline profile-bundle layer.
+#
+# `dsh.bundle.patch` in package.json points here; the profile launcher applies
+# this overlay after its base layers. One inserted loader row:
+#   id   = stable loader entry id (rename-safe)
+#   name = the package whose main module exports the plugin (lib/index.js)
+#
+# The client half needs no row: the package's `dsh.client` manifest
+# (platform: web) makes the client module loader pick up lib/client.js.
+- insert:
+    - id: session-timeline
+      name: '@dsh-external/session-timeline'
