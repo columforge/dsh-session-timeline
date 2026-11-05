@@ -27,8 +27,10 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 **推荐：市场索引（git 源，免 npm）**——在 DSH **插件页 → 发现** 添加索引 URL：
 
 ```
-https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json
+https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
+
+（GitHub Pages 通道，任何网络可达；若用 raw 通道可用 `https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json`。）
 
 列表中的 0.0.34 即 git 源条目（钉在固定 commit，安装走 DSH 的 bundle 通道）。也可直接命令行安装（`<commit>` 取 `market-index.json` 的 `source.commit`）：
 

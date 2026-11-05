@@ -27,8 +27,10 @@ Prerequisite: DSH (DeepSeek Harness) ≥ v0.1.3-alpha.1, installed and running (
 **Recommended: market index (git source, no npm)** — in the DSH **Plugins → Discover** tab, add this index URL:
 
 ```
-https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json
+https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
+
+(GitHub Pages channel, reachable from any network; the raw channel `https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json` also works where raw.githubusercontent.com is reachable.)
 
 Version 0.0.34 there is a git-source entry pinned to a fixed commit; installing goes through DSH's bundle path. Or install from the command line directly (`<commit>` = `source.commit` in `market-index.json`):
 
