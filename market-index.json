@@ -22,7 +22,7 @@
   },
   "plugins": [
     {
-      "name": "@dsh-external/session-timeline",
+      "name": "@columforge/session-timeline",
       "title": {
         "en": "Session Timeline",
         "zh": "会话时间线"

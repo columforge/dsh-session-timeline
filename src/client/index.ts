@@ -1,5 +1,5 @@
 /**
- * @dsh-external/session-timeline — client: right sidebar tab (session timeline).
+ * @columforge/session-timeline — client: right sidebar tab (session timeline).
  * Fishbone timeline: central horizontal axis (arrow at the newest end) with
  * date ticks (YY-MM-DD at date changes, text on the side opposite the
  * spurs); sessions alternate above/below the axis left→right by creation
@@ -64,7 +64,7 @@ const P = require('@deepseek-ai/dsh-client-ui-primitives') as {
 const API_BASE = '/session-timeline/api'
 const POLL_MS = 8000
 const FETCH_TIMEOUT_MS = 15000
-const TAB_ID = '@dsh-external/session-timeline'
+const TAB_ID = '@columforge/session-timeline'
 const TAB_KIND = 'session-timeline'
 /** All-workspaces canvas sentinel — mirrors the host's GLOBAL_BUCKET (/list|/link|/unlink accept it). */
 const GLOBAL_WORKSPACE = '__global__'

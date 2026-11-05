@@ -1,5 +1,5 @@
 /**
- * @dsh-external/session-timeline — session timeline (right-panel tab).
+ * @columforge/session-timeline — session timeline (right-panel tab).
  * Host side: scans ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd
  * for the header (createdAt / parentSession / isSeeded / cwd), the first real
  * user message time (creation-time criterion), the last session/title, and
@@ -36,7 +36,7 @@
 import type { Context } from 'cordis';
 import z from 'schemastery';
 import type { HandoffHit } from './parse.js';
-export declare const name = "@dsh-external/session-timeline";
+export declare const name = "@columforge/session-timeline";
 export declare const inject: string[];
 export interface Config {
     /** Manual-link storage root; empty = <DSH_HOME>/session-timeline */

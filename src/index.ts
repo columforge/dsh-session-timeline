@@ -1,5 +1,5 @@
 /**
- * @dsh-external/session-timeline — session timeline (right-panel tab).
+ * @columforge/session-timeline — session timeline (right-panel tab).
  * Host side: scans ~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd
  * for the header (createdAt / parentSession / isSeeded / cwd), the first real
  * user message time (creation-time criterion), the last session/title, and
@@ -44,7 +44,7 @@ import { parseLog, signatureLog } from './parse.js'
 import type { HandoffHit, EventSignature } from './parse.js'
 import { inferForkParents } from './lineage-infer.js'
 
-export const name = '@dsh-external/session-timeline'
+export const name = '@columforge/session-timeline'
 export const inject = ['webServer']
 
 export interface Config {

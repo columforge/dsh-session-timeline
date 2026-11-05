@@ -9,4 +9,4 @@
 # (platform: web) makes the client module loader pick up lib/client.js.
 - insert:
     - id: session-timeline
-      name: '@dsh-external/session-timeline'
+      name: '@columforge/session-timeline'
