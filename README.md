@@ -26,7 +26,7 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 
 打开 DSH 的**插件页 → 添加插件**，按下列任一方式安装：
 
-1. **npm 包名**（推荐，待发布）：填 `@dsh-external/session-timeline`（npm 发布后可用，见 [发布渠道](#发布渠道)）
+1. **npm 包名**（**尚未上架**：公共 npm 查询 `@dsh-external/session-timeline` 现返回 404；上架后按版本号填写即可，见 [发布渠道](#发布渠道)）
 2. **Release 压缩包**（立即可用）：从 [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases) 下载 `.tgz`，解压后填入**解压目录的本地路径**
 3. **源码构建**（开发者）：
 
@@ -40,7 +40,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 
 ## DSH 版本支持
 
-安装约束按 `package.json` 的 peerDependencies（`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`、`cordis` `>=4.0.0-rc <5`）；除 peerDependencies 外不声明硬性 DSH 版本约束，DSH 版本与 **session-timeline 版本**的对应关系按下表：
+安装约束：`package.json` 声明 `engines.dsh = ">=0.1.3-alpha.1 <2.0.0"`（DSH 插件管理器在安装/激活时按此拦截不匹配的运行时，边界语义为"v4 日志可读的最老版本"）与 peerDependencies（`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`、`cordis` `>=4.0.0-rc <5`）。DSH 版本与 **session-timeline 版本**的对应关系按下表：
 
 | DSH 版本 | 对应 session-timeline 版本 | fork 血缘识别 |
 |---|---|---|
@@ -146,9 +146,9 @@ npm test         # pretest 自动 build，再跑全部单测
 
 ## 发布渠道
 
-- **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（含构建好的 `lib/`）
-- **npm**（规划中）：所有 peer 依赖（`@deepseek-ai/dsh-host-webserver` 等）均在公共 npm，具备直接发布条件
-- **插件市场索引**：`market-index.json` 提供市场格式 1 索引，npm 发布后在 DSH「发现」页添加本仓库 raw URL 即可浏览安装
+- **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（含构建好的 `lib/`，解压即装）——**当前唯一分发包**
+- **npm**（未上架）：公共 npm 尚未发布本包（查询 `@dsh-external/session-timeline` 返回 404）；peer 依赖均在公共 npm，具备直接发布条件，上架后 README 与市场索引随之切换
+- **插件市场索引**：`market-index.json` 为市场格式 1 索引（版本号、安装源、`engines.dsh` 最低 DSH 版本）；npm 上架前其 npm 源条目不可安装、仅作版本目录。在 DSH「发现」页添加本仓库 raw URL 即可浏览
 
 ## 许可证
 

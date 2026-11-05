@@ -26,7 +26,7 @@ Prerequisite: DSH (DeepSeek Harness) installed and running.
 
 Open the DSH **Plugins page → Add plugin**, then use any of:
 
-1. **npm package name** (recommended, once published): `@dsh-external/session-timeline` — see [Distribution](#distribution)
+1. **npm package name** (**not published yet**: `@dsh-external/session-timeline` currently returns 404 on the public npm registry; enter the version spec once it ships — see [Distribution](#distribution))
 2. **Release tarball** (works today): download the `.tgz` from [GitHub Releases](https://github.com/columforge/dsh-session-timeline/releases), extract it, and enter the extracted directory as a **local path**
 3. **Build from source** (developers):
 
@@ -40,7 +40,7 @@ Then enter this directory as the local path in "Add plugin".
 
 ## DSH version support
 
-Installation is constrained by the `package.json` peerDependencies (`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`, `cordis` `>=4.0.0-rc <5`); no hard DSH version constraint is declared beyond that. The correspondence between DSH versions and **session-timeline versions** is the table below:
+Installation constraints: `package.json` declares `engines.dsh = ">=0.1.3-alpha.1 <2.0.0"` (the DSH plugin manager rejects a mismatched runtime at install/activation; the lower bound is the oldest DSH that can read v4 session logs) plus the peerDependencies (`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`, `cordis` `>=4.0.0-rc <5`). The correspondence between DSH versions and **session-timeline versions** is the table below:
 
 | DSH version | session-timeline version | Fork lineage detection |
 |---|---|---|
@@ -146,9 +146,9 @@ When touching the A*/layout geometry, read the "three historical pitfalls" comme
 
 ## Distribution
 
-- **GitHub Releases**: every version ships an `npm pack` tgz (with the built `lib/`)
-- **npm** (planned): all peer dependencies (`@deepseek-ai/dsh-host-webserver` etc.) are on public npm, so direct publishing is viable
-- **Plugin market index**: `market-index.json` provides a format-1 market index; once published on npm, add this repo's raw URL in the DSH Discover tab to browse and install
+- **GitHub Releases**: every version ships an `npm pack` tgz (with the built `lib/`, extract and install) — **the only distribution channel today**
+- **npm** (not published): the public registry still returns 404 for this package; all peer dependencies are on public npm, so publishing is ready to go, and README plus market index switch once it ships
+- **Plugin market index**: `market-index.json` is a format-1 index (versions, install source, `engines.dsh` minimum DSH version); before npm publication its npm-sourced entries are not installable and serve as a version catalog only. Add this repo's raw URL in the DSH Discover tab to browse
 
 ## License
 
