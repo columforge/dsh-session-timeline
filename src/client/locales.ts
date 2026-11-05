@@ -140,6 +140,8 @@ export const zh = {
   'detail.created': '（创建 {time}）',
   'detail.logCreated': '日志创建 {time}',
   'detail.seeded': 'handoff 种子开场',
+  'detail.forkInferred': '原生 fork（血缘按继承前缀推断）',
+  'detail.forkSourceMissing': 'fork：来源缺失（已删或不在本工作区）',
   'detail.archived': '已归档',
 
   /* 血缘叙述 */
@@ -280,6 +282,8 @@ export const en = {
   'detail.created': '(created {time})',
   'detail.logCreated': 'log created {time}',
   'detail.seeded': 'handoff-seeded opening',
+  'detail.forkInferred': 'native fork (lineage inferred from the inherited prefix)',
+  'detail.forkSourceMissing': 'fork: source missing (deleted or outside this workspace)',
   'detail.archived': 'archived',
 
   'lineage.prefix': 'Lineage: ',
@@ -417,6 +421,8 @@ export const ja = {
   'detail.created': '（作成 {time}）',
   'detail.logCreated': 'ログ作成 {time}',
   'detail.seeded': 'handoff シード開始',
+  'detail.forkInferred': 'ネイティブ fork（血縁は継承プレフィックスから推定）',
+  'detail.forkSourceMissing': 'fork：ソース不明（削除またはこのワークスペース外）',
   'detail.archived': 'アーカイブ済み',
 
   'lineage.prefix': '血縁：',
@@ -554,6 +560,8 @@ export const es = {
   'detail.created': '(creada {time})',
   'detail.logCreated': 'registro creado {time}',
   'detail.seeded': 'inicio con semilla handoff',
+  'detail.forkInferred': 'fork nativo (linaje inferido del prefijo heredado)',
+  'detail.forkSourceMissing': 'fork: origen desconocido (eliminado o fuera de este espacio)',
   'detail.archived': 'archivada',
 
   'lineage.prefix': 'Linaje: ',
@@ -691,6 +699,8 @@ export const fr = {
   'detail.created': '(créée {time})',
   'detail.logCreated': 'journal créé {time}',
   'detail.seeded': 'départ par graine handoff',
+  'detail.forkInferred': 'fork natif (lignée déduite du préfixe hérité)',
+  'detail.forkSourceMissing': 'fork : source introuvable (supprimée ou hors de cet espace)',
   'detail.archived': 'archivée',
 
   'lineage.prefix': 'Filiation : ',
@@ -828,6 +838,8 @@ export const de = {
   'detail.created': '(erstellt {time})',
   'detail.logCreated': 'Protokoll erstellt {time}',
   'detail.seeded': 'Handoff-Seed-Start',
+  'detail.forkInferred': 'native fork (Herkunft aus dem geerbten Präfix abgeleitet)',
+  'detail.forkSourceMissing': 'fork: Quelle fehlt (gelöscht oder außerhalb dieses Workspace)',
   'detail.archived': 'archiviert',
 
   'lineage.prefix': 'Herkunft: ',
@@ -966,6 +978,8 @@ export const ru = {
   'detail.created': '(создана {time})',
   'detail.logCreated': 'журнал создан {time}',
   'detail.seeded': 'начало с handoff-затравки',
+  'detail.forkInferred': 'нативный fork (происхождение выведено из унаследованного префикса)',
+  'detail.forkSourceMissing': 'fork: источник не найден (удалён или вне этого рабочего пространства)',
   'detail.archived': 'в архиве',
 
   'lineage.prefix': 'Происхождение: ',
@@ -1103,6 +1117,8 @@ export const pt = {
   'detail.created': '(criada {time})',
   'detail.logCreated': 'registro criado {time}',
   'detail.seeded': 'início com semente handoff',
+  'detail.forkInferred': 'fork nativo (linhagem inferida do prefixo herdado)',
+  'detail.forkSourceMissing': 'fork: origem ausente (removida ou fora deste workspace)',
   'detail.archived': 'arquivada',
 
   'lineage.prefix': 'Linhagem: ',

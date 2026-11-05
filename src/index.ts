@@ -7,7 +7,12 @@
  * name=handoff; seq/time/turn each — parsing in ./parse).
  * Top-level sessions (session- prefixed id) are timeline nodes; parentSession
  * pointing at an in-bucket top-level session forms a native edge — one child
- * = handoff link, multiple children = branch.
+ * = handoff link, multiple children = branch. Native forks stopped writing
+ * parentSession (DSH v0.2.2-alpha.2): children with an own fork marker
+ * (last session/end-seed carrying inherited:true; parse.ts) recover their
+ * source via inherited-prefix signature matching (lineage-infer.ts, same
+ * bucket only, earliest header.createdAt tie-break) — parentSource marks
+ * header vs inferred lineage.
  * Manual drag links are stored per workspace at ~/.dsh/session-timeline/<bucket>.json.
  * API (/session-timeline/api):
  *   GET  /workspaces?session=…        workspace list (buckets)
@@ -35,8 +40,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 import z from 'schemastery'
-import { parseLog } from './parse.js'
-import type { HandoffHit } from './parse.js'
+import { parseLog, signatureLog } from './parse.js'
+import type { HandoffHit, EventSignature } from './parse.js'
+import { inferForkParents } from './lineage-infer.js'
 
 export const name = '@dsh-external/session-timeline'
 export const inject = ['webServer']
@@ -60,6 +66,12 @@ export interface SessionNode {
   logCreatedAt: number
   /** Raw header.parentSession (may point outside the bucket or to a deleted session). */
   parent: string | null
+  /** Where the effective parent link came from: raw header.parentSession,
+   *  or inferred from the fork's inherited-prefix signature (native forks
+   *  stopped writing parentSession in DSH v0.2.2-alpha.2). */
+  parentSource: 'header' | 'inferred' | null
+  /** Own fork marker seq (= inherited prefix length; null = not a native fork). */
+  forkMarkerSeq: number | null
   /** header.isSeeded: opened from a handoff context seed. */
   seeded: boolean
   cwd: string | null
@@ -293,6 +305,8 @@ export function apply(ctx: Context, config: Config): void {
                 logCreatedAt: parsed.createdAt,
                 lastAt: parsed.lastAt,
                 parent: parsed.parent,
+                parentSource: parsed.parent !== null ? 'header' : null,
+                forkMarkerSeq: parsed.forkMarkerSeq,
                 seeded: parsed.seeded,
                 cwd: parsed.cwd,
                 bucket,
@@ -311,6 +325,47 @@ export function apply(ctx: Context, config: Config): void {
     return entry
   }
 
+  /** Event-signature cache for fork-lineage inference (mtime+size keyed like
+   *  the parse cache; FIFO-capped — only fork-bearing buckets ever fill it). */
+  interface SigEntry { mtimeMs: number; size: number; sig: EventSignature | null }
+  const sigCache = new Map<string, SigEntry>()
+  const SIG_CACHE_CAP = 512
+  const sessionSignature = (bucket: string, sid: string): EventSignature | null => {
+    const file = join(sessionsRoot, bucket, sid, SESSION_FILE)
+    let st
+    try { st = statSync(file) } catch { return null }
+    const cached = sigCache.get(sid)
+    if (cached !== undefined && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.sig
+    let sig: EventSignature | null = null
+    try {
+      const text = decompressLog(readFileSync(file))
+      sig = text === null ? null : signatureLog(text)
+    } catch { sig = null }
+    if (sigCache.size >= SIG_CACHE_CAP) {
+      const oldest = sigCache.keys().next()
+      if (!oldest.done) sigCache.delete(oldest.value)
+    }
+    sigCache.set(sid, { mtimeMs: st.mtimeMs, size: st.size, sig })
+    return sig
+  }
+
+  /** Native forks stopped writing header.parentSession (DSH v0.2.2-alpha.2),
+   *  so header lineage alone misses every new fork. For children with an own
+   *  fork marker whose header parent is absent/out-of-bucket, recover the
+   *  source via the inherited-prefix signature match (pure logic in
+   *  ./lineage-infer; same bucket only — lineage never crosses workspaces). */
+  const resolveForkParents = (bucket: string, nodes: SessionNode[]): void => {
+    if (!nodes.some((n) => n.forkMarkerSeq !== null)) return
+    const inferred = inferForkParents(nodes, (id) => sessionSignature(bucket, id))
+    for (const n of nodes) {
+      const hit = inferred.get(n.id)
+      if (hit !== undefined) {
+        n.parent = hit.parent
+        n.parentSource = 'inferred'
+      }
+    }
+  }
+
   /** Bucket node scan (top-level session nodes only). */
   const listBucketNodes = (bucket: string): { nodes: SessionNode[]; unreadable: number } => {
     const nodes: SessionNode[] = []
@@ -320,9 +375,12 @@ export function apply(ctx: Context, config: Config): void {
     for (const ent of ents) {
       if (!ent.isDirectory()) continue
       const e = parseSessionDir(bucket, ent.name)
-      if (e.node !== null) nodes.push(e.node)
+      /* Shallow copy: the inference below mutates parent links, and the parse
+       * cache entry must stay pristine. */
+      if (e.node !== null) nodes.push({ ...e.node })
       else if (ent.name.startsWith('session-') && e.mtimeMs !== 0) unreadable += 1
     }
+    resolveForkParents(bucket, nodes)
     nodes.sort((a, b) => a.lastAt - b.lastAt)
     return { nodes, unreadable }
   }

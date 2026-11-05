@@ -38,6 +38,23 @@ npm run build        # needs DSH_CHECKOUT pointing at a DSH source checkout (see
 
 Then enter this directory as the local path in "Add plugin".
 
+## DSH version support
+
+Installation is constrained by the `package.json` peerDependencies (`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`, `cordis` `>=4.0.0-rc <5`); no hard DSH version constraint is declared beyond that. The correspondence between DSH versions and **session-timeline versions** is the table below:
+
+| DSH version | session-timeline version | Fork lineage detection |
+|---|---|---|
+| `≥ v0.2.2-alpha.2` (incl. current master) | **`≥ 0.0.32`** | inference only — upstream b096659245 stopped writing `parentSession` for ordinary forks ("ordinary forks independent of source lineage"; upstream upgrade guide at `docs/upgrade-guide/v0.2.1-rc.3/independent-session-forks`, that directory name predates the first shipping tag and is not a version marker). **Plugin ≤ 0.0.31 shows no fork lineage in this range** (that combination is exactly the "native branch not recognized" regression — upgrading the plugin restores it, no data migration needed) |
+| `v0.1.7-alpha.1` ≤ X `< v0.2.2-alpha.2` | `≥ 0.0.18` | both paths in parallel: header `parentSession` + inherited-prefix inference (inference available from plugin 0.0.32; earlier plugins with the header path alone already cover forks in this range), backing each other up |
+| `v0.1.3-alpha.1` ≤ X `< v0.1.7-alpha.1` | `≥ 0.0.18` | header `parentSession` path only (parent pointers written since DSH `v0.1.2-alpha.1`); the fork seed's `inherited:true` marker does not exist yet, so 0.0.32+ inference never triggers here and behavior equals the header path |
+| `< v0.1.3-alpha.1` | — (no plugin version usable) | ❌ unsupported: pre-v4 formats, no `session.v4.jsonl.zstd`; those sessions cannot be read and do not appear |
+
+- **Plugin version scheme**: `0.0.18` = first timeline release (native lineage via header + handoff criteria); `0.0.18 ~ 0.0.31` share the same lineage behavior (UI/geometry iterations in between; public release records 0.0.27 ~ 0.0.31); `0.0.32` = fork inherited-prefix inference release (current version in this repository; distribution channels follow once 0.0.32 ships).
+- **Upgrade rule**: when DSH moves to `≥ v0.2.2-alpha.2`, upgrade the plugin to `≥ 0.0.32` (source builds/hot reload take effect immediately); across the other ranges the plugin is backward compatible and never needs downgrading.
+- Inference is read-only over session logs: inherited-prefix `(type,seq,time)` signature matching + earliest log `createdAt` tie-break; no match means no edge, never an invented one.
+- All other per-session features (creation time, handoff criteria, archive stamping) behave identically across the v4-readable range — no version forks.
+- Development/verification baseline: DSH master `8bd073392e` (2026-11-04, `≥ v0.2.2-alpha.2` behavior) + plugin `0.0.32`; 59 tests plus a live reconciliation on the columnas workspace passed.
+
 ## Usage
 
 ### Time semantics
@@ -77,6 +94,7 @@ Then enter this directory as the local path in "Add plugin".
 - **Independent sessions** sit on the fishbone layer; **handoff chain descendants** stack outward in lineage depth rows, branch children fan out beside their parent
 - Edges use **orthogonal obstacle-avoiding routing** (A* with congestion cost to spread parallel wires) — never diagonal, never through a node box
 - **Lineage = native edges ∪ manual edges**: in/out degrees, `⑂N` badges, branch detection, and detail-pane narrative all compute over the merged chain — a native single-child edge also renders as a purple branch once you add a manual successor
+- **Native fork lineage inference**: since DSH v0.2.2-alpha.2 ordinary forks no longer write `parentSession` (upstream "ordinary forks independent of source lineage" decision, commit b096659245; `v0.2.1-rc.5` and earlier still wrote it), so the timeline recovers lineage from the fork's durable physical trace — the child's last `session/end-seed` event (`inherited:true`) marks the inherited prefix length, which is prefix-signature-matched (`(type,seq,time)` tuples) against the workspace's other top-level sessions; on multiple hits the earliest log `createdAt` wins. No match (source deleted / cross-workspace) means no edge and no invention — the detail pane notes "native fork (lineage inferred from the inherited prefix)". A fork child's creation time uses only its own first user message (inherited prefix skipped); handoff criteria likewise count own invocations only
 - The "handoff" tag means the session **actually invoked the handoff skill** or was seeded from one (no text matching)
 - Manual entries carry an inline "unlink" button; changes apply immediately
 
@@ -90,7 +108,7 @@ Then enter this directory as the local path in "Add plugin".
 
 ## Data and privacy
 
-- **Read-only** scan of `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd` (header, title, first-user-message time, last-event time, handoff invocation details; zstd multi-frame decode with mtime/size caching)
+- **Read-only** scan of `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd` (header, title, first-user-message time, last-event time, handoff invocation details; zstd multi-frame decode with mtime/size caching, per-event `(type,seq,time)` signatures for fork lineage inference; zstd multi-frame decode + mtime/size caching, signature cache filled only for buckets holding fork children)
 - Archive state is **read-only** too: the workspace registry's archive set (service mirror, falling back to `~/.dsh/storages/workspace.json` `global.archivedSessionIds`)
 - **The only write**: manual links go to `~/.dsh/session-timeline/<bucket>.json` (isolated per workspace)
 - Nothing is uploaded; session storage is never modified

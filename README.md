@@ -38,6 +38,23 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 
 然后把本目录填入「添加插件」的本地路径。
 
+## DSH 版本支持
+
+安装约束按 `package.json` 的 peerDependencies（`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`、`cordis` `>=4.0.0-rc <5`）；除 peerDependencies 外不声明硬性 DSH 版本约束，DSH 版本与 **session-timeline 版本**的对应关系按下表：
+
+| DSH 版本 | 对应 session-timeline 版本 | fork 血缘识别 |
+|---|---|---|
+| `≥ v0.2.2-alpha.2`（含当前 master） | **`≥ 0.0.32`** | 仅推断路径——上游 b096659245 起普通 fork 不再写 `parentSession`（"ordinary forks independent of source lineage"；上游升级指南在 `docs/upgrade-guide/v0.2.1-rc.3/independent-session-forks`，该目录名先于首发 tag，勿当版本判据）。**插件 ≤ 0.0.31 在此区间 fork 不显示血缘**（即「分支识别失效」的根因组合，升级插件即恢复，无需迁移数据） |
+| `v0.1.7-alpha.1` ≤ X `< v0.2.2-alpha.2` | `≥ 0.0.18` | 双路径并行：header `parentSession` + 继承前缀推断（推断自插件 0.0.32 起提供；更早插件仅 header，已能覆盖该段 fork），互为兜底 |
+| `v0.1.3-alpha.1` ≤ X `< v0.1.7-alpha.1` | `≥ 0.0.18` | 仅 header `parentSession` 路径（父指针自 DSH `v0.1.2-alpha.1` 起写入）；fork 种子的 `inherited:true` 标记尚未存在，0.0.32+ 的推断在此段恒不触发，行为等同 header 路径 |
+| `< v0.1.3-alpha.1` | —（任意插件版本均不可用） | ❌ 不支持：无 `session.v4.jsonl.zstd`（v4 之前的格式），该批会话不可读、不入时间线 |
+
+- **插件版本口径**：`0.0.18` = 时间线首版（原生血缘 header 路径 + handoff 判定）；`0.0.18 ~ 0.0.31` 血缘行为一致（其间为界面/几何迭代；公开发布记录 0.0.27 ~ 0.0.31）；`0.0.32` = fork 继承前缀推断版（本仓库当前版本，发布渠道随 0.0.32 上架）。
+- **升级口径**：DSH 升至 `≥ v0.2.2-alpha.2` 时，插件须同步升至 `≥ 0.0.32`（源码构建/热重载即刻生效）；其余区间插件向下兼容，旧插件无需降级。
+- 推断只读会话日志：按继承前缀 `(type,seq,time)` 签名匹配 + 日志 `createdAt` 次序消歧；匹配不到不出边、不臆造。
+- 顶层会话的创建时间等其余功能在 v4 可读区间内行为一致，不随版本分叉。
+- 开发/验证基线：DSH master `8bd073392e`（2026-11-04，`≥ v0.2.2-alpha.2` 行为）+ 插件 `0.0.32`；59 项测试与 columnas 工作区线上对账通过。
+
 ## 使用指南
 
 ### 时间语义
@@ -77,6 +94,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 - **独立会话**在鱼骨层（主轴上下交替）；**handoff 链子会话**用血缘深度行向轴外侧叠行，分支子与父同侧扇出
 - 连线走**正交避障路由**（A* + 拥挤代价错开平行走线），绝不出斜线、不穿会话框
 - **血缘链 = 原生边 ∪ 手工边**：出入度、`⑂N` 徽章、分支判定、详情区叙述全部按合并链计算——父已有原生单子再补一条手工后继时，单子边也显形为紫色分支线
+- **原生 fork 血缘推断**：DSH v0.2.2-alpha.2 起普通 fork 不再写入 `parentSession`（上游"普通 fork 与来源血缘解耦"决策，commit b096659245；`v0.2.1-rc.5` 及更早仍在写），时间线改从 fork 的持久物理痕迹恢复血缘——子代日志末位 `session/end-seed`（`inherited:true`）标记继承前缀长度，与同工作区其余顶层会话做前缀签名匹配（`(type,seq,time)` 三元组），命中多条时按日志 `createdAt` 最早者为来源；匹配不到（来源已删/跨工作区）不出边、不臆造，详情区标注「原生 fork（血缘按继承前缀推断）」。fork 子代的创建时间只取自有首条用户消息（跳过继承前缀），handoff 判定同样只数自有调用
 - 「handoff」标签 = 会话**实际调用过 handoff skill** 或以 handoff 种子开场（不按消息文字匹配）
 - 手工条目自带「断开」按钮，删改即时生效
 
@@ -90,7 +108,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 
 ## 数据与隐私
 
-- **只读**扫描 `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`（header、标题、首条用户消息时间、末事件时间、handoff 调用明细；zstd 多帧解码 + mtime/size 缓存）
+- **只读**扫描 `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`（header、标题、首条用户消息时间、末事件时间、handoff 调用明细、fork 血缘推断的逐事件 `(type,seq,time)` 签名；zstd 多帧解码 + mtime/size 缓存，签名缓存仅在有 fork 子代的桶内填充）
 - 归档状态同样**只读**：读工作区注册表归档集（服务镜像，兜底 `~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds`）
 - **唯一写入**：手工衔接落 `~/.dsh/session-timeline/<bucket>.json`（按工作区隔离）
 - 不上传任何数据，不改动会话存储

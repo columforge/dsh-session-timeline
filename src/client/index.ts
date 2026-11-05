@@ -157,6 +157,10 @@ type SNode = {
   /** Last activity (used for timeline positioning/display). */
   lastAt: number
   parent: string | null
+  /** Where the parent link came from: header.parentSession or fork-prefix inference. */
+  parentSource?: 'header' | 'inferred' | null
+  /** Own fork marker seq (= inherited prefix length; null = not a native fork). */
+  forkMarkerSeq?: number | null
   seeded: boolean
   cwd: string | null
   bucket: string
@@ -1279,6 +1283,8 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                 : []),
               bucketTail(sel.bucket),
               ...(sel.seeded ? [t('detail.seeded')] : []),
+              ...(sel.parentSource === 'inferred' ? [t('detail.forkInferred')] : []),
+              ...(sel.forkMarkerSeq !== null && sel.parent === null ? [t('detail.forkSourceMissing')] : []),
               ...(sel.archived === true ? [t('detail.archived')] : []),
             ].join(' · ')),
           /* Lineage row = merged-chain predecessor narration: native parent (in/out of view) + manual
