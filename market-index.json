@@ -49,6 +49,16 @@
       },
       "versions": [
         {
+          "version": "0.0.33",
+          "publishTimestamp": 1793870936,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.3-alpha.1 <2.0.0"
+          }
+        },
+        {
           "version": "0.0.31",
           "publishTimestamp": 1793726642,
           "source": {
