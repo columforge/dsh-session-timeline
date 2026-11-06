@@ -705,6 +705,10 @@ export function apply(ctx: Context, config: Config): void {
                     const clipped = clip(text)
                     cur.assistant = clipped.text
                     cur.assistantClipped = clipped.clipped
+                    // Formal text replaces the reasoning fallback: the flag must
+                    // follow the content, or a turn with a real reply stays
+                    // labelled "reasoning".
+                    cur.assistantReasoning = false
                   } else if (cur.assistant === '') {
                     const reasoning = blocks.filter((c) => c?.type === 'reasoning' && typeof c.text === 'string')
                       .map((c) => String(c.text)).join('\n').trim()

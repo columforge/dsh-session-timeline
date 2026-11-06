@@ -230,9 +230,9 @@ test('/turns：assistant 无正文回退 reasoning（assistantReasoning 标记�
     assert.equal(both.code, 200)
     assert.equal(both.data.last.assistant, 'formal reply')
     assert.equal(both.data.last.assistantClipped, false)
-    // 现行为钉死：reasoning 兜底置位后不被后续正式正文复位（旗标 set-once）——
-    // 已作为遗留问题汇报 lead（是否复位由其裁决），此处按当前实现断言。
-    assert.equal(both.data.last.assistantReasoning, true)
+    // 修复后行为（2026-11-06）：正式正文覆盖 reasoning 兜底时旗标必须跟随内容
+    // 复位——否则有正式回复的轮次仍被标成"推理"（修复前 set-once 的错误行为）。
+    assert.equal(both.data.last.assistantReasoning, false)
     const reasoningOnly = await call(handler, '/session-timeline/api/turns?session=session-t10')
     assert.equal(reasoningOnly.data.last.assistant, 'only reasoning here')
     assert.equal(reasoningOnly.data.last.assistantReasoning, true)
