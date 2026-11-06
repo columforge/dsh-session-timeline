@@ -88,17 +88,27 @@ function errorText(t: Translate, r: { code?: string; params?: Record<string, unk
   return r.error !== undefined && r.error !== '' ? r.error : t('error.opFailed')
 }
 
+/** Notify every subscriber of a panel store (snapshot: a listener may unsubscribe from inside). */
+function notifyAll(listeners: Set<() => void>): void {
+  for (const listener of [...listeners]) listener()
+}
+
+/** Subscribe to a panel store; returns the unsubscribe function. */
+function subscribeTo(listeners: Set<() => void>, listener: () => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
 /** The panel's selected workspace (null = follow the current session's bucket). The tab title counts from this,
  *  kept consistent with the panel body; reset on unmount. */
 const viewBucket: { value: string | null; listeners: Set<() => void> } = { value: null, listeners: new Set() }
 function setViewBucket(value: string | null): void {
   if (viewBucket.value === value) return
   viewBucket.value = value
-  for (const listener of [...viewBucket.listeners]) listener()
+  notifyAll(viewBucket.listeners)
 }
 function subscribeViewBucket(listener: () => void): () => void {
-  viewBucket.listeners.add(listener)
-  return () => { viewBucket.listeners.delete(listener) }
+  return subscribeTo(viewBucket.listeners, listener)
 }
 
 /** The panel's archive display mode: 'all' = show every session, archived boxes dashed-marked
@@ -109,11 +119,10 @@ const archiveView: { value: ArchiveMode; listeners: Set<() => void> } = { value:
 function setArchiveView(value: ArchiveMode): void {
   if (archiveView.value === value) return
   archiveView.value = value
-  for (const listener of [...archiveView.listeners]) listener()
+  notifyAll(archiveView.listeners)
 }
 function subscribeArchiveView(listener: () => void): () => void {
-  archiveView.listeners.add(listener)
-  return () => { archiveView.listeners.delete(listener) }
+  return subscribeTo(archiveView.listeners, listener)
 }
 
 /** The panel's lane view (all-workspaces canvas): collapsed lane ids + hidden lane ids.
@@ -126,11 +135,10 @@ const laneView: { value: LaneViewState; listeners: Set<() => void> } = {
   listeners: new Set(),
 }
 function notifyLaneView(): void {
-  for (const listener of [...laneView.listeners]) listener()
+  notifyAll(laneView.listeners)
 }
 function subscribeLaneView(listener: () => void): () => void {
-  laneView.listeners.add(listener)
-  return () => { laneView.listeners.delete(listener) }
+  return subscribeTo(laneView.listeners, listener)
 }
 function toggleLaneSet(kind: 'collapsed' | 'hidden', laneId: string): void {
   const next = new Set(laneView.value[kind])

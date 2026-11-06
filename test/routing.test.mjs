@@ -150,3 +150,16 @@ test('微扰沿边滑动：step 改变时出口沿外侧边水平滑、不离开
   for (const pt of outs) assert.equal(pt[1], top, '出口恒在外侧框缘外 3px')
   assert.deepEqual(outs.map((p) => p[0] - colX(layout, 'p')), [-10, 0, 10])
 })
+
+test('routeEdgePath：layout 缺 side/depth 条目时按默认 up 兜底', () => {
+  const layout = {
+    nodes: [], colOf: new Map([['p', 0], ['c', 1]]), sideOf: new Map(), depthOf: new Map(),
+    axisY: 200, innerW: 0, innerH: 0, maxDepth: 0, corridorUp: 0, corridorDown: 0,
+  }
+  const d = routeEdgePath({ layout, obstacles: [], occupied: new Map(), from: 'p', to: 'c', step: 0 })
+  assertOrthogonal(d)
+  const pts = segmentPoints(d)
+  const fTop = 200 - 26 - 96
+  assert.deepEqual(pts[0], [colX(layout, 'p') - 10, fTop - 3])
+  assert.deepEqual(pts[pts.length - 1], [colX(layout, 'c') - NODE_W / 2 - 3, fTop + 48 - 6])
+})

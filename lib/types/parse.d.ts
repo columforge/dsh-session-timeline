@@ -1,6 +1,10 @@
 /**
  * Pure session-log parser (no plugin deps; shared by host and unit tests).
  * Input: decoded JSONL text of session.v4.jsonl.zstd; torn/corrupt lines are skipped.
+ *
+ * Split into one scanner per fact (title, fork marker, user messages, last
+ * activity, handoff calls) so each rule stays under the ub-mode CRAP budget:
+ * the composition lives in parseLog, the per-line decoding in the helpers.
  */
 /** One handoff skill invocation (in log order). */
 export interface HandoffHit {

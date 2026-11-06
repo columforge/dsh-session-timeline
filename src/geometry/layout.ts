@@ -44,95 +44,145 @@ export interface Layout<T extends LayoutNode = LayoutNode> {
   corridorDown: number
 }
 
+/** Side/depth assignment state; one mutable place for the topological pass. */
+interface AssignState {
+  nativeParent: Map<string, string>
+  manualParent: Map<string, string>
+  sideOf: Map<string, 'up' | 'down'>
+  depthOf: Map<string, number>
+  /** Standalone-side alternation counter. */
+  flip: number
+  upMax: number
+  downMax: number
+}
+
+/** Top of a node box on one side at one depth row. */
+function rowTop(side: 'up' | 'down', depth: number, axisY: number): number {
+  return side === 'up'
+    ? axisY - GAP - NODE_H - depth * (NODE_H + ROW_GAP)
+    : axisY + GAP + depth * (NODE_H + ROW_GAP)
+}
+
+/** Dependency = native parent if present, else manual predecessor (both normalized to parent→child). */
+function dependencyOf(node: LayoutNode, state: AssignState): string | undefined {
+  return state.nativeParent.get(node.id) ?? state.manualParent.get(node.id)
+}
+
+/** Record one assignment and widen the side's max depth. */
+function commitAssignment(state: AssignState, nodeId: string, side: 'up' | 'down', depth: number): void {
+  state.sideOf.set(nodeId, side)
+  state.depthOf.set(nodeId, depth)
+  if (side === 'up' && depth > state.upMax) state.upMax = depth
+  if (side === 'down' && depth > state.downMax) state.downMax = depth
+}
+
+/** Standalone node: alternate sides, depth 0. */
+function assignStandalone(node: LayoutNode, state: AssignState): void {
+  const side: 'up' | 'down' = state.flip % 2 === 0 ? 'up' : 'down'
+  state.flip += 1
+  commitAssignment(state, node.id, side, 0)
+}
+
+/**
+ * Assign one node when its dependency is already assigned.
+ * @returns true when the node was assigned (standalone counts), false when deferred.
+ */
+function assignNode(node: LayoutNode, state: AssignState): boolean {
+  const dep = dependencyOf(node, state)
+  if (dep === undefined) {
+    assignStandalone(node, state)
+    return true
+  }
+  if (!state.sideOf.has(dep)) return false
+  const side = state.sideOf.get(dep) ?? 'up'
+  const depth = (state.depthOf.get(dep) ?? 0) + 1
+  commitAssignment(state, node.id, side, depth)
+  return true
+}
+
+/* Assign side/depth in topological order: process a node only after its
+ * dependency (native parent / manual from) is assigned; otherwise defer to
+ * the next pass — a manual link's "from" may be created later than "to"
+ * (drag semantics), so creation order is unreliable. This also stays
+ * decoupled from the display sort key (lastAt etc.). Only theoretical cycles
+ * remain after the passes; they fall back to standalone. */
+function assignSides(byCreation: LayoutNode[], state: AssignState): void {
+  const pending = byCreation
+  let progressed = true
+  while (pending.length > 0 && progressed) {
+    progressed = false
+    for (let pi = pending.length - 1; pi >= 0; pi -= 1) {
+      if (!assignNode(pending[pi]!, state)) continue
+      pending.splice(pi, 1)
+      progressed = true
+    }
+  }
+  for (const node of pending) assignStandalone(node, state)
+}
+
+/** Outer box bounds per side (Infinity/-Infinity when no nodes on that side). */
+function outerBounds(
+  nodes: readonly LayoutNode[],
+  sideOf: Map<string, 'up' | 'down'>,
+  depthOf: Map<string, number>,
+  axisY: number,
+): { up: number; down: number } {
+  let up = Infinity
+  let down = -Infinity
+  for (const node of nodes) {
+    const side = sideOf.get(node.id) ?? 'up'
+    const top = rowTop(side, depthOf.get(node.id) ?? 0, axisY)
+    if (side === 'up') up = Math.min(up, top)
+    else down = Math.max(down, top + NODE_H)
+  }
+  return { up, down }
+}
+
 export function computeLayout<T extends LayoutNode>(
   nodesIn: T[],
   edges: LayoutEdge[],
   manualLinks: LayoutManualLink[],
 ): Layout<T> {
   const nodes = nodesIn
-  const colOf = new Map<string, number>()
-  const sideOf = new Map<string, 'up' | 'down'>()
-  const depthOf = new Map<string, number>()
   // Native lineage (handoff chains and branches): children always sink a depth row.
   const nativeParent = new Map<string, string>()
   for (const e of edges) nativeParent.set(e.to, e.from)
   // Manual links (earlier from → later to): "to" also sinks a depth row.
   const manualParent = new Map<string, string>()
   for (const l of manualLinks) manualParent.set(l.to, l.from)
-  /* Assign side/depth in topological order: process a node only after its
-   * dependency (native parent / manual from) is assigned; otherwise defer to
-   * the next pass — a manual link's "from" may be created later than "to"
-   * (drag semantics), so creation order is unreliable. This also stays
-   * decoupled from the display sort key (lastAt etc.). */
+
   const byCreation = [...nodesIn].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
-  let flip = 0
-  let upMax = 0
-  let downMax = 0
-  const pending = byCreation
-  let progressed = true
-  while (pending.length > 0 && progressed) {
-    progressed = false
-    for (let pi = pending.length - 1; pi >= 0; pi--) {
-      const n = pending[pi]
-      const np = nativeParent.get(n.id)
-      const mp = manualParent.get(n.id)
-      const dep = np ?? mp
-      if (dep !== undefined && !sideOf.has(dep)) continue
-      let side: 'up' | 'down'
-      let depth: number
-      if (dep !== undefined) {
-        // Lineage (handoff chain/branch) or manual link: inherit the parent's side, depth + 1.
-        side = sideOf.get(dep) ?? 'up'
-        depth = (depthOf.get(dep) ?? 0) + 1
-      } else {
-        side = flip % 2 === 0 ? 'up' : 'down'
-        depth = 0
-        flip += 1
-      }
-      sideOf.set(n.id, side)
-      depthOf.set(n.id, depth)
-      if (side === 'up' && depth > upMax) upMax = depth
-      if (side === 'down' && depth > downMax) downMax = depth
-      pending.splice(pi, 1)
-      progressed = true
-    }
+  const state: AssignState = {
+    nativeParent,
+    manualParent,
+    sideOf: new Map(),
+    depthOf: new Map(),
+    flip: 0,
+    upMax: 0,
+    downMax: 0,
   }
-  // Fallback: only theoretical cycles remain; assign as standalone.
-  for (const n of pending) {
-    const side: 'up' | 'down' = flip % 2 === 0 ? 'up' : 'down'
-    sideOf.set(n.id, side)
-    depthOf.set(n.id, 0)
-    flip += 1
-  }
+  assignSides(byCreation, state)
+
+  const colOf = new Map<string, number>()
   nodesIn.forEach((n, i) => { colOf.set(n.id, i) })
-  const upBlock = (upMax + 1) * NODE_H + upMax * ROW_GAP
-  const downBlock = (downMax + 1) * NODE_H + downMax * ROW_GAP
+  const upBlock = (state.upMax + 1) * NODE_H + state.upMax * ROW_GAP
+  const downBlock = (state.downMax + 1) * NODE_H + state.downMax * ROW_GAP
   const axisY = DATE_BAND + upBlock + GAP
   /* Outer corridors (horizontal channels for all links): offset 12px beyond
    * the actual outer edge of the outermost box per side, so they stay clear
    * of every box and spur even with stacked depth rows. */
-  const rowTop = (side: 'up' | 'down', depth: number): number =>
-    side === 'up'
-      ? axisY - GAP - NODE_H - depth * (NODE_H + ROW_GAP)
-      : axisY + GAP + depth * (NODE_H + ROW_GAP)
-  let upOuter = Infinity
-  let downOuter = -Infinity
-  for (const n of nodes) {
-    const t = rowTop(sideOf.get(n.id) ?? 'up', depthOf.get(n.id) ?? 0)
-    if ((sideOf.get(n.id) ?? 'up') === 'up') upOuter = Math.min(upOuter, t)
-    else downOuter = Math.max(downOuter, t + NODE_H)
-  }
-  const corridorUp = (upOuter === Infinity ? DATE_BAND : upOuter) - 12
-  const corridorDown = (downOuter === -Infinity ? axisY + GAP + NODE_H : downOuter) + 12
+  const outer = outerBounds(nodes, state.sideOf, state.depthOf, axisY)
+  const corridorUp = (outer.up === Infinity ? DATE_BAND : outer.up) - 12
+  const corridorDown = (outer.down === -Infinity ? axisY + GAP + NODE_H : outer.down) + 12
   return {
     nodes,
     colOf,
-    sideOf,
-    depthOf,
+    sideOf: state.sideOf,
+    depthOf: state.depthOf,
     axisY,
     innerW: Math.max(nodes.length * SPACING + 24, 320),
     innerH: axisY + GAP + downBlock + DATE_BAND,
-    maxDepth: Math.max(upMax, downMax),
+    maxDepth: Math.max(state.upMax, state.downMax),
     corridorUp,
     corridorDown,
   }
@@ -143,11 +193,5 @@ export function colX(layout: Layout, id: string): number {
 }
 
 export function nodeTop(layout: Layout, id: string): number {
-  const side = layout.sideOf.get(id) ?? 'up'
-  const depth = layout.depthOf.get(id) ?? 0
-  if (side === 'up') {
-    // Above the axis: depth 0 sits nearest; deeper rows stack away from the axis.
-    return layout.axisY - GAP - NODE_H - depth * (NODE_H + ROW_GAP)
-  }
-  return layout.axisY + GAP + depth * (NODE_H + ROW_GAP)
+  return rowTop(layout.sideOf.get(id) ?? 'up', layout.depthOf.get(id) ?? 0, layout.axisY)
 }

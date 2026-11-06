@@ -39,6 +39,54 @@ export interface InferredParent {
   matchedSeq: number
 }
 
+/** Cut length of the child's own marker, or null when the node is not a fork. */
+function validCut(node: InferNode): number | null {
+  const cut = node.forkMarkerSeq
+  if (cut === null || !Number.isSafeInteger(cut) || cut <= 0) return null
+  return cut
+}
+
+/** In-bucket header lineage wins: inference only fills gaps (absent/out-of-bucket parent). */
+function hasBucketParent(node: InferNode, bucketIds: Set<string>): boolean {
+  return node.parent !== null && bucketIds.has(node.parent)
+}
+
+/** True when the child's first `cut` tuples equal the candidate's own prefix verbatim. */
+function prefixMatches(prefix: EventSignature, candidate: EventSignature, cut: number): boolean {
+  for (let i = 0; i < cut; i += 1) {
+    const a = prefix[i]!
+    const b = candidate[i]!
+    if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) return false
+  }
+  return true
+}
+
+/** Tie-break: the source must predate the child; an equal logCreatedAt resolves to the smaller id. */
+function earlierThan(candidate: InferNode, best: InferNode | null): boolean {
+  if (best === null) return true
+  if (candidate.logCreatedAt !== best.logCreatedAt) return candidate.logCreatedAt < best.logCreatedAt
+  return candidate.id < best.id
+}
+
+/** Earliest-logCreatedAt candidate whose own prefix matches the child's marker cut. */
+function bestParent(
+  child: InferNode,
+  nodes: readonly InferNode[],
+  signatureOf: (id: string) => EventSignature | null,
+  cut: number,
+  prefix: EventSignature,
+): InferNode | null {
+  let best: InferNode | null = null
+  for (const candidate of nodes) {
+    if (candidate.id === child.id) continue
+    const sig = signatureOf(candidate.id)
+    if (sig === null || sig.length < cut) continue
+    if (!prefixMatches(prefix, sig, cut)) continue
+    if (earlierThan(candidate, best)) best = candidate
+  }
+  return best
+}
+
 /**
  * Infer each fork child's source session within one bucket.
  * @param nodes - the bucket's top-level session nodes.
@@ -51,31 +99,14 @@ export function inferForkParents(
   signatureOf: (id: string) => EventSignature | null,
 ): Map<string, InferredParent> {
   const out = new Map<string, InferredParent>()
-  const byId = new Set(nodes.map((n) => n.id))
-  for (const n of nodes) {
-    const cut = n.forkMarkerSeq
-    if (cut === null || !Number.isSafeInteger(cut) || cut <= 0) continue
-    if (n.parent !== null && byId.has(n.parent)) continue
-    const sig = signatureOf(n.id)
+  const bucketIds = new Set(nodes.map((n) => n.id))
+  for (const node of nodes) {
+    const cut = validCut(node)
+    if (cut === null || hasBucketParent(node, bucketIds)) continue
+    const sig = signatureOf(node.id)
     if (sig === null || sig.length < cut) continue
-    const prefix = sig.slice(0, cut)
-    let best: InferNode | null = null
-    for (const o of nodes) {
-      if (o.id === n.id) continue
-      const osig = signatureOf(o.id)
-      if (osig === null || osig.length < cut) continue
-      let match = true
-      for (let i = 0; i < cut; i += 1) {
-        const a = prefix[i]!
-        const b = osig[i]!
-        if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) { match = false; break }
-      }
-      if (!match) continue
-      if (best === null
-        || o.logCreatedAt < best.logCreatedAt
-        || (o.logCreatedAt === best.logCreatedAt && o.id < best.id)) best = o
-    }
-    if (best !== null) out.set(n.id, { parent: best.id, matchedSeq: cut })
+    const parent = bestParent(node, nodes, signatureOf, cut, sig.slice(0, cut))
+    if (parent !== null) out.set(node.id, { parent: parent.id, matchedSeq: cut })
   }
   return out
 }

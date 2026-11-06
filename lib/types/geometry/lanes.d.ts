@@ -42,9 +42,8 @@ export interface LanesLayout<T extends LayoutNode = LayoutNode> {
     innerW: number;
     innerH: number;
 }
-export declare function computeLanesLayout<T extends LayoutNode>(nodesIn: T[], edges: LayoutEdge[], manualLinks: LayoutManualLink[], laneOfNode: (n: T) => string, 
-/** Ids of lanes to render as slim collapsed bands (their nodes stay out of the scale). */
-collapsed?: Set<string>): LanesLayout<T>;
+/** `collapsed` = ids of lanes to render as slim label-only bands (their nodes stay out of the scale). */
+export declare function computeLanesLayout<T extends LayoutNode>(nodesIn: T[], edges: LayoutEdge[], manualLinks: LayoutManualLink[], laneOfNode: (n: T) => string, collapsed?: Set<string>): LanesLayout<T>;
 /** Absolute canvas x of a node within the lane stack (shared-scale column). */
 export declare function laneColX<T extends LayoutNode>(l: LanesLayout<T>, id: string): number;
 /** Absolute canvas y of a node box top within the lane stack (its own lane's axis). */

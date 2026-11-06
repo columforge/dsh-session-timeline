@@ -14,6 +14,9 @@
  * 3. Anti-overlap nudges must slide along the edge (exits horizontally along
  *    the top/bottom edge, entries vertically along the side) — perpendicular
  *    nudges push the point back inside the obstacle, same effect as 1.
+ *
+ * The module is split into small steps (channels → A* → waypoints → fallback)
+ * so each rule stays under the ub-mode CRAP budget.
  */
 import { type Layout } from './layout.js';
 export interface Obstacle {

@@ -49,16 +49,12 @@ export interface LanesLayout<T extends LayoutNode = LayoutNode> {
   innerH: number
 }
 
-export function computeLanesLayout<T extends LayoutNode>(
+/** Shared scale: global columns by display order (same rule as the single view), skipping collapsed lanes. */
+function assignSharedColumns<T extends LayoutNode>(
   nodesIn: T[],
-  edges: LayoutEdge[],
-  manualLinks: LayoutManualLink[],
   laneOfNode: (n: T) => string,
-  /** Ids of lanes to render as slim collapsed bands (their nodes stay out of the scale). */
-  collapsed?: Set<string>,
-): LanesLayout<T> {
-  /* Shared scale: global columns by display order (same rule as the single view),
-   * covering visible (non-collapsed) lanes only — collapsed lanes occupy no columns. */
+  collapsed: Set<string> | undefined,
+): Map<string, number> {
   const colOf = new Map<string, number>()
   let ci = 0
   for (const n of nodesIn) {
@@ -66,60 +62,99 @@ export function computeLanesLayout<T extends LayoutNode>(
     colOf.set(n.id, ci)
     ci += 1
   }
+  return colOf
+}
 
-  /* Group per lane, preserving display order; lane stacking order = first appearance. */
+/** Group per lane, preserving display order; lane stacking order = first appearance. */
+function groupByLane<T extends LayoutNode>(
+  nodesIn: T[],
+  laneOfNode: (n: T) => string,
+): { laneIds: string[]; byLane: Map<string, T[]> } {
   const laneIds: string[] = []
   const byLane = new Map<string, T[]>()
   for (const n of nodesIn) {
     const lane = laneOfNode(n)
     const list = byLane.get(lane)
-    if (list === undefined) { byLane.set(lane, [n]); laneIds.push(lane) }
-    else list.push(n)
+    if (list === undefined) {
+      byLane.set(lane, [n])
+      laneIds.push(lane)
+    } else {
+      list.push(n)
+    }
   }
+  return { laneIds, byLane }
+}
 
+/** Collapsed lane: slim label-only band; its nodes stay out of nodes/colOf/laneOf. */
+function collapsedLane<T extends LayoutNode>(laneId: string, y: number): Lane<T> {
+  return {
+    nodes: [], colOf: new Map(), sideOf: new Map(), depthOf: new Map(),
+    axisY: y + COLLAPSED_H, innerW: 0, innerH: COLLAPSED_H, maxDepth: 0,
+    corridorUp: y, corridorDown: y + COLLAPSED_H,
+    id: laneId, top: y, collapsed: true,
+  }
+}
+
+/** One visible lane: fishbone on the lane's own nodes, then shared columns + stack offset. */
+function buildLane<T extends LayoutNode>(
+  laneId: string,
+  laneNodes: T[],
+  y: number,
+  colOf: Map<string, number>,
+  edges: LayoutEdge[],
+  manualLinks: LayoutManualLink[],
+): Lane<T> {
+  const member = new Set(laneNodes.map((n) => n.id))
+  /* Native edges / manual links stay within one workspace; the filter also
+   * guards against out-of-lane pairs reaching this lane's router. */
+  const base = computeLayout(
+    laneNodes,
+    edges.filter((e) => member.has(e.from) && member.has(e.to)),
+    manualLinks.filter((l) => member.has(l.from) && member.has(l.to)),
+  )
+  /* Shared scale overrides the lane-local columns; band geometry shifts by the stack offset. */
+  const laneColOf = new Map<string, number>()
+  for (const n of laneNodes) laneColOf.set(n.id, colOf.get(n.id) ?? 0)
+  return {
+    ...base,
+    id: laneId,
+    top: y,
+    collapsed: false,
+    colOf: laneColOf,
+    axisY: base.axisY + y,
+    corridorUp: base.corridorUp + y,
+    corridorDown: base.corridorDown + y,
+  }
+}
+
+/** `collapsed` = ids of lanes to render as slim label-only bands (their nodes stay out of the scale). */
+export function computeLanesLayout<T extends LayoutNode>(
+  nodesIn: T[],
+  edges: LayoutEdge[],
+  manualLinks: LayoutManualLink[],
+  laneOfNode: (n: T) => string,
+  collapsed?: Set<string>,
+): LanesLayout<T> {
+  const colOf = assignSharedColumns(nodesIn, laneOfNode, collapsed)
+  const { laneIds, byLane } = groupByLane(nodesIn, laneOfNode)
   const laneOf = new Map<string, string>()
   const laneById = new Map<string, Lane<T>>()
   const lanes: Lane<T>[] = []
   let y = TOP_BAND
   for (const laneId of laneIds) {
     if (collapsed !== undefined && collapsed.has(laneId)) {
-      /* Collapsed lane: slim label-only band; its nodes stay out of nodes/colOf/laneOf
-       * (the shared scale covers visible lanes only, so gridlines keep their meaning). */
-      const lane: Lane<T> = {
-        nodes: [], colOf: new Map(), sideOf: new Map(), depthOf: new Map(),
-        axisY: y + COLLAPSED_H, innerW: 0, innerH: COLLAPSED_H, maxDepth: 0,
-        corridorUp: y, corridorDown: y + COLLAPSED_H,
-        id: laneId, top: y, collapsed: true,
-      }
+      const lane = collapsedLane<T>(laneId, y)
       laneById.set(laneId, lane)
       lanes.push(lane)
       y += COLLAPSED_H + LANE_GAP
       continue
     }
     const laneNodes = byLane.get(laneId) ?? []
-    const member = new Set(laneNodes.map((n) => n.id))
-    /* Native edges / manual links stay within one workspace; the filter also
-     * guards against out-of-lane pairs reaching this lane's router. */
-    const laneEdges = edges.filter((e) => member.has(e.from) && member.has(e.to))
-    const laneLinks = manualLinks.filter((l) => member.has(l.from) && member.has(l.to))
-    const base = computeLayout(laneNodes, laneEdges, laneLinks)
-    /* Shared scale overrides the lane-local columns; band geometry shifts by the stack offset. */
-    const laneColOf = new Map<string, number>()
-    for (const n of laneNodes) laneColOf.set(n.id, colOf.get(n.id) ?? 0)
-    const lane: Lane<T> = {
-      ...base,
-      id: laneId,
-      top: y,
-      collapsed: false,
-      colOf: laneColOf,
-      axisY: base.axisY + y,
-      corridorUp: base.corridorUp + y,
-      corridorDown: base.corridorDown + y,
-    }
+    const lane = buildLane(laneId, laneNodes, y, colOf, edges, manualLinks)
     for (const n of laneNodes) laneOf.set(n.id, laneId)
     laneById.set(laneId, lane)
     lanes.push(lane)
-    y += base.innerH + LANE_GAP
+    y += lane.innerH + LANE_GAP
   }
 
   const gridNodes = nodesIn.filter((n) => !(collapsed !== undefined && collapsed.has(laneOfNode(n))))

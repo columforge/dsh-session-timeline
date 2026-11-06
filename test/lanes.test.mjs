@@ -110,3 +110,28 @@ test('折叠泳道：细条带高度、节点退出共享刻度、列重排', ()
   const sum = L.lanes.reduce((acc, l) => acc + l.innerH, 0)
   assert.equal(L.innerH, TOP_BAND + sum + LANE_GAP * (L.lanes.length - 1))
 })
+
+/* Coverage pins for laneNodeTop/laneColX: down-side row formula, unknown id,
+ * unknown lane. Behavior was already fixed by the UI geometry contract; these
+ * keep the branch exercised while lanes.ts is split under the CRAP gate. */
+test('laneNodeTop：down 侧按泳道轴 + GAP + 深度行', () => {
+  // Assignment walks the tail first: c up, b down, a up (lane A only)
+  const ns = [node('a', 1, 'A'), node('b', 2, 'A'), node('c', 3, 'A')]
+  const L = computeLanesLayout(ns, [], [], (n) => n.bucket)
+  const laneA = L.laneById.get('A')
+  assert.equal(laneA.sideOf.get('b'), 'down')
+  assert.equal(laneNodeTop(L, 'b'), laneA.axisY + 26)
+  assert.equal(laneNodeTop(L, 'c'), laneA.axisY - 26 - NODE_H)
+})
+
+test('laneNodeTop / laneColX：未知节点回退（0 / 首列中心）', () => {
+  const L = computeLanesLayout([node('a', 1, 'A')], [], [], (n) => n.bucket)
+  assert.equal(laneNodeTop(L, 'missing'), 0)
+  assert.equal(laneColX(L, 'missing'), SPACING / 2)
+})
+
+test('laneNodeTop：折叠泳道内的节点无泳道盒子 = 0', () => {
+  const ns = [node('a1', 1, 'A'), node('b1', 2, 'B')]
+  const L = computeLanesLayout(ns, [], [], (n) => n.bucket, new Set(['B']))
+  assert.equal(laneNodeTop(L, 'b1'), 0)
+})
