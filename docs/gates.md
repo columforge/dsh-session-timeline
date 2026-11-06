@@ -10,9 +10,32 @@ CRAP (complexity × coverage), duplication (dryer), and mutation testing (mutato
 | --- | --- | --- |
 | `src/parse.ts`, `src/lineage-infer.ts`, `src/geometry/*` | CRAP < 10 | Pure logic; the plugin's lineage/parse/geometry rules; unit-tested directly. |
 | `src/**/*.ts` | duplication score < 0.82 | Whole tree; UI duplication counts too. |
-| `src/index.ts` (host routes, zstd scan, caches) | not gated yet | No route-level coverage: measuring CRAP would be 0% coverage and demand host mocks. Follow-up: add host route tests, then include it. |
-| `src/client/index.ts` (panel UI, 1.5k lines) | not gated yet | No DOM/unit coverage. CRAP there is coverage arithmetic, not a design signal. Follow-up: component tests, then include pure helpers. |
-| mutation testing | deferred | TS mutants re-run `npm test` (with `pretest` rebuild) per mutant; too slow for a pass. Adopt after the CRAP baseline is green. |
+| `src/index.ts` (host routes, zstd scan, caches) | partially gated | Route tests exist (test/routes.test.mjs) and the zstd scan region is compliant (readFrameHeader 6.0 / decodeFrameDescriptor 5.0 / walkBlocks 7.0 / scanZstdFrames 6.0). Sole blocker: `apply` (CC 196) — decomposition approved (L1 pure scanners + L2 assembly shell, all ≤10); include the whole file at threshold 10 once it lands. |
+| `src/client/index.ts` (panel UI, 1.5k lines) | not gated yet | No DOM/unit coverage. CRAP there is coverage arithmetic, not a design signal. Follow-up: extract pure helpers (errorText/interpolate/formatters) into a tested module, then include them. |
+| mutation testing (mutator) | periodic, single-file | Baseline 2026-11-06 on `src/parse.ts`: 126 sites; serial fresh-snapshot run 73/53 killed before pins → 85/41 after 6 pins (test/parse-pins.test.mjs); the 41 survivors are triaged equivalents (premise/pathological-input/compositional/catch-swallowed/out-of-contract). Constraints until upstream bugs are fixed: run with `--max-workers 1`, delete `.metrics/mutate/<ns>.edn` for an authoritative fresh run (stale snapshots inherit false kills), and coordinate a build window — workers symlink `lib/`, so a worker build writes through to the main tree when run in parallel. Cost ≈1.5s per mutant (tsc dominates); ~3 min per file. Not a per-PR gate yet. |
+
+## Quick gates (pre-commit + CI)
+
+- **pre-commit** (activate once per clone: `git config core.hooksPath scripts/githooks`):
+  seconds-fast, changed files only. CRAP real-threshold mode requires fresh LCOV
+  (newer than both `src/**` and `lib/**`); otherwise it reports complexity without
+  a threshold (stale coverage would fabricate 0% rows), and duplication always
+  runs. Missing tools warn and pass. Full `gate.sh` stays the authority.
+- **CI** (`.github/workflows/ci.yml`, push master + PRs): installs crapper/dryer
+  from upstream, runs the suite under c8 (no build — `lib/` is committed), then
+  the same CRAP/duplication thresholds. Known limitation: a PR that changes
+  `src/` without rebuilding `lib/` tests stale artifacts; the local gate before
+  merging is the backstop.
+
+## Behavior differential (refactor guard)
+
+`ST_DIFF=1 node --test test/diff.slow.test.mjs` compares the committed `lib/`
+(HEAD, via `git archive`) against the working-tree `lib/`: parseLog /
+signatureLog over every local session log, fork attribution per workspace
+bucket, and 900 deterministic random geometry cases (fixed seed). Run it after
+any rebuild that follows a refactor — identical output is the proof that
+behavior did not change. Skips without `ST_DIFF`; the real-log segment skips
+when no sessions root or zstd CLI exists.
 
 ## Install the gate tools
 
@@ -64,6 +87,18 @@ above 0.82. `src/index.ts` and `src/client/index.ts` remain out of CRAP scope
 (see the table above), so their complexity is not yet governed.
 
 Behavior proof for the refactor: an old-vs-new differential (HEAD lib vs the
-rebuilt lib) over all 697 local session logs (parse/signature), 21 workspace
+rebuilt lib) over all local session logs (parse/signature), 21 workspace
 buckets (fork attribution), and 900 deterministic random geometry cases
 (layout/lanes/routing/edge routing) produced identical outputs.
+
+## Second pass (2026-11-06, parallel batch)
+
+- Host route coverage landed (22 tests) and the zstd frame scanner was split
+  (readFrameHeader / decodeFrameDescriptor / walkBlocks); differential over all
+  local logs (750-file superset of the original 697) proved the split
+  byte-identical.
+- Mutation trial on `src/parse.ts` produced the pins in test/parse-pins.test.mjs
+  (12 survivors killed); the remaining 41 are documented equivalents (see the
+  scope table).
+- One behavior fix came out of the route tests: `assistantReasoning` now resets
+  when formal text covers the reasoning fallback.

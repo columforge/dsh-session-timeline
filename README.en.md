@@ -163,6 +163,8 @@ When touching the A*/layout geometry, read the "three historical pitfalls" comme
 
 Quality gates (ub-mode targeted CRAP + duplication): `bash scripts/gate.sh` — scope, tool install and the current baseline are in [docs/gates.md](docs/gates.md).
 
+Commit-time fast gate (sub-second, only looks at git-changed files): activate the pre-commit hook once with `git config core.hooksPath scripts/githooks` — it runs crapper (CRAP < 10, reusing on-disk LCOV when fresh) and always dryer (duplication < 0.82); with stale coverage it only prints the complexity report without blocking, and missing tools warn and let the commit pass. CI runs tests + LCOV + the same thresholds on push/PR ([.github/workflows/ci.yml](.github/workflows/ci.yml), no build, `lib/` is committed).
+
 ## Distribution
 - **npm (primary channel)**: `@columforge/session-timeline` on public npm, prebuilt install (`publishConfig.access=public`). Community catalogs (e.g. awesome-dsh-plugin) build their `index.json` from npm data, so the plugin is picked up into DSH Discover once published
 - **git source (backup channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; DSH installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)

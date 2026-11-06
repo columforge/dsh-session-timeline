@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # crapper / dryer 的 requires-python >= 3.11，CI 上原生满足，无需放宽。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install gate tools (crapper, dryer)
+        run: |
+          pip install \
+            git+https://github.com/unclebob/crapper \
+            git+https://github.com/unclebob/dryer
+
+      # 不 build：lib/ 已提交，测试直接导入。
+      # 已知局限：改了 src/ 不重建 lib/ 时，这里测的是旧产物；
+      # 合并前由本地 scripts/gate.sh（含 build）兜底。
+      - name: Tests + LCOV coverage
+        run: npx --yes c8 --reporter=lcov --reports-dir target/coverage/typescript node --test test/*.test.mjs
+
+      - name: CRAP gate (targeted, threshold 10)
+        run: crapper --use-existing-coverage src/parse.ts src/lineage-infer.ts src/geometry --threshold 10
+
+      # dryer 命中重复时仍 exit 0（非零仅表示用法错误），与 scripts/gate.sh
+      # 一致按输出里的 DUPLICATE score= 行判定。
+      - name: Duplication gate (threshold 0.82)
+        run: |
+          OUT="$(dryer --threshold 0.82 src)"
+          printf '%s\n' "$OUT"
+          if printf '%s\n' "$OUT" | grep -q '^DUPLICATE score='; then
+            echo "::error::duplication >= 0.82 found in src/"
+            exit 1
+          fi
