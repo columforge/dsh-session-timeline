@@ -161,6 +161,8 @@ The build borrows tsc/tsdown from a DSH source checkout: `export DSH_CHECKOUT=<d
 
 When touching the A*/layout geometry, read the "three historical pitfalls" comment atop `src/geometry/*.ts` first; verify with `npm test` before browser DOM sampling (SVG path V/H are single-coordinate commands — parsing them as x,y pairs gives false alarms).
 
+Quality gates (ub-mode targeted CRAP + duplication): `bash scripts/gate.sh` — scope, tool install and the current baseline are in [docs/gates.md](docs/gates.md).
+
 ## Distribution
 - **npm (primary channel)**: `@columforge/session-timeline` on public npm, prebuilt install (`publishConfig.access=public`). Community catalogs (e.g. awesome-dsh-plugin) build their `index.json` from npm data, so the plugin is picked up into DSH Discover once published
 - **git source (backup channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; DSH installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)

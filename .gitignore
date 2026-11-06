@@ -3,3 +3,7 @@ node_modules/
 # profile launcher loads lib/index.js directly — end users have no DSH source
 # checkout to run scripts/build.sh.
 *.tgz
+
+# ub-mode gate artifacts (see docs/gates.md)
+.metrics/
+target/

@@ -161,6 +161,8 @@ npm test         # pretest 自动 build，再跑全部单测
 
 改 A*/布局几何时先读 `src/geometry/*.ts` 顶部「三个历史坑」注释；验证 = `npm test` 全绿后再浏览器 DOM 采样（SVG path 的 V/H 是单坐标指令，按 x,y 成对解析会误报）。
 
+质量门禁（ub-mode 定向 CRAP + 重复度）：`bash scripts/gate.sh`——范围、工具安装与当前基线见 [docs/gates.md](docs/gates.md)。
+
 ## 发布渠道
 - **npm（主渠道）**：`@columforge/session-timeline`（公共 npm，预构建安装；`publishConfig.access=public`）。社区目录（如 awesome-dsh-plugin）的 `index.json` 由脚本从 npm 数据生成，npm 上架后即可被收录进 DSH 发现页
 - **git 源（备份通道）**：`market-index.json` 的版本条目使用 `source.type: git`，钉在 GitHub 仓库的固定 commit；DSH 以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
