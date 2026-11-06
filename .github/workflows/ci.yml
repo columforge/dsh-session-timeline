@@ -26,7 +26,13 @@ jobs:
             git+https://github.com/unclebob/crapper \
             git+https://github.com/unclebob/dryer
 
-      # 不 build：lib/ 已提交，测试直接导入。
+      # 不 build：lib/ 已提交，测试直接导入。但 lib/index.js 运行时导入 peer
+      # 依赖（cordis/schemastery/@deepseek-ai/dsh-host-webserver），host 侧
+      # 测试（global/routes）需要它们在 node_modules 里——首次提交曾因此
+      # ERR_MODULE_NOT_FOUND 挂掉，本步是修复。
+      - name: Install package peers
+        run: npm install --no-audit --no-fund
+
       # 已知局限：改了 src/ 不重建 lib/ 时，这里测的是旧产物；
       # 合并前由本地 scripts/gate.sh（含 build）兜底。
       - name: Tests + LCOV coverage
