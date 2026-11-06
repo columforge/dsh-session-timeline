@@ -21,18 +21,23 @@ A DSH (DeepSeek Harness) plugin that adds a **Session Timeline** tab to the righ
 | UI language | Follows the language configured in DSH (中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português), switching live |
 
 ## Installation
-
 Prerequisite: DSH (DeepSeek Harness) ≥ v0.1.3-alpha.1, installed and running (see [DSH version support](#dsh-version-support)).
 
-**Recommended: market index (git source, no npm)** — in the DSH **Plugins → Discover** tab, add this index URL:
+**Recommended: npm (prebuilt, install and go)**:
+
+```bash
+dsh plugin --profile web add @columforge/session-timeline
+```
+
+Or enter the package name `@columforge/session-timeline` in the DSH Plugins page → Add plugin.
+
+**Alternative: market index (git source, no npm)** — in the DSH **Plugins → Discover** tab, add this index URL:
 
 ```
 https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
 
-(GitHub Pages channel, reachable from any network; the raw channel `https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json` also works where raw.githubusercontent.com is reachable.)
-
-Version 0.0.34 there is a git-source entry pinned to a fixed commit; installing goes through DSH's bundle path. Or install from the command line directly (`<commit>` = `source.commit` in `market-index.json`):
+The newest entry there is a git source pinned to a fixed commit, installed through the bundle path. Or install from the command line directly (`<commit>` = `source.commit` in `market-index.json`):
 
 ```bash
 dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
@@ -50,9 +55,6 @@ npm run build        # needs DSH_CHECKOUT pointing at a DSH source checkout (see
 ```
 
 Then enter this directory as the local path in "Add plugin".
-
-npm is not used: this plugin ships over git (`lib/` is committed, the `dsh.bundle` patch lives at the repo root, and installation needs no build).
-
 ## DSH version support
 
 Installation constraints: `package.json` declares `engines.dsh = ">=0.1.3-alpha.1 <2.0.0"` (the DSH plugin manager rejects a mismatched runtime at install/activation; the lower bound is the oldest DSH that can read v4 session logs) plus the peerDependencies (`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`, `cordis` `>=4.0.0-rc <5`). The correspondence between DSH versions and **session-timeline versions** is the table below:
@@ -160,11 +162,10 @@ The build borrows tsc/tsdown from a DSH source checkout: `export DSH_CHECKOUT=<d
 When touching the A*/layout geometry, read the "three historical pitfalls" comment atop `src/geometry/*.ts` first; verify with `npm test` before browser DOM sampling (SVG path V/H are single-coordinate commands — parsing them as x,y pairs gives false alarms).
 
 ## Distribution
-
-- **git source (primary channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; the DSH plugin manager installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)
+- **npm (primary channel)**: `@columforge/session-timeline` on public npm, prebuilt install (`publishConfig.access=public`). Community catalogs (e.g. awesome-dsh-plugin) build their `index.json` from npm data, so the plugin is picked up into DSH Discover once published
+- **git source (backup channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; DSH installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)
 - **GitHub Releases**: every version ships an `npm pack` tgz (an extract-and-install local directory, also useful for offline distribution)
-- **npm**: not used (the public registry has no such package). Note: community catalogs such as awesome-dsh-plugin build their `index.json` **from npm data only**, so entries without an npm package are skipped — a git-only plugin will not appear in those catalogs' DSH Discover pages; use the self-hosted market-index URL above
-
+- Release title/body and publishing rules: [docs/release-notes-style.md](docs/release-notes-style.md)
 ## License
 
 [BSD-3-Clause](LICENSE)

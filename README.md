@@ -21,18 +21,23 @@ DSH（DeepSeek Harness）插件：在右侧边栏新增**「会话时间线」**
 | 界面语言 | 跟随 DSH 设置的语言（中文 / English / 日本語 / Español / Français / Deutsch / Русский / Português）即时切换 |
 
 ## 安装
-
 前置：已安装并运行 DSH（DeepSeek Harness ≥ v0.1.3-alpha.1，见 [DSH 版本支持](#dsh-版本支持)）。
 
-**推荐：市场索引（git 源，免 npm）**——在 DSH **插件页 → 发现** 添加索引 URL：
+**推荐：npm（预构建，安装即用）**：
+
+```bash
+dsh plugin --profile web add @columforge/session-timeline
+```
+
+或在 DSH 插件页「添加插件」填入包名 `@columforge/session-timeline`。
+
+**备选：市场索引（git 源，不经过 npm）**——在 DSH **插件页 → 发现** 添加索引 URL：
 
 ```
 https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
 
-（GitHub Pages 通道，任何网络可达；若用 raw 通道可用 `https://raw.githubusercontent.com/columforge/dsh-session-timeline/master/market-index.json`。）
-
-列表中的 0.0.34 即 git 源条目（钉在固定 commit，安装走 DSH 的 bundle 通道）。也可直接命令行安装（`<commit>` 取 `market-index.json` 的 `source.commit`）：
+列表中的最新条目为 git 源（钉固定 commit，走 bundle 安装通道）。也可直接命令行安装（`<commit>` 取 `market-index.json` 的 `source.commit`）：
 
 ```bash
 dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
@@ -50,9 +55,6 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 ```
 
 然后把本目录填入「添加插件」的本地路径。
-
-npm 渠道未启用：本插件以 git 分发（`lib/` 已随仓库提交，`dsh.bundle` 补丁在仓库根，安装时无需构建）。
-
 ## DSH 版本支持
 
 安装约束：`package.json` 声明 `engines.dsh = ">=0.1.3-alpha.1 <2.0.0"`（DSH 插件管理器在安装/激活时按此拦截不匹配的运行时，边界语义为"v4 日志可读的最老版本"）与 peerDependencies（`@deepseek-ai/dsh-host-webserver` / `@deepseek-ai/dsh-client-ui-slots` `>=0.0.1-rc <2`、`cordis` `>=4.0.0-rc <5`）。DSH 版本与 **session-timeline 版本**的对应关系按下表：
@@ -160,11 +162,10 @@ npm test         # pretest 自动 build，再跑全部单测
 改 A*/布局几何时先读 `src/geometry/*.ts` 顶部「三个历史坑」注释；验证 = `npm test` 全绿后再浏览器 DOM 采样（SVG path 的 V/H 是单坐标指令，按 x,y 成对解析会误报）。
 
 ## 发布渠道
-
-- **git 源（主渠道）**：`market-index.json` 的版本条目使用 `source.type: git`，钉在 GitHub 仓库的固定 commit；DSH 插件管理器直接以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
+- **npm（主渠道）**：`@columforge/session-timeline`（公共 npm，预构建安装；`publishConfig.access=public`）。社区目录（如 awesome-dsh-plugin）的 `index.json` 由脚本从 npm 数据生成，npm 上架后即可被收录进 DSH 发现页
+- **git 源（备份通道）**：`market-index.json` 的版本条目使用 `source.type: git`，钉在 GitHub 仓库的固定 commit；DSH 以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
 - **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（解压即装的本地目录形态，也便于离线分发）
-- **npm**：未启用（公共 registry 无此包）。注意：社区目录（如 awesome-dsh-plugin）的 `index.json` 由脚本**仅从 npm 数据生成**，无 npm 包的条目会被跳过——git-only 插件不会出现在这些目录的 DSH 发现页；请使用上面的自托管 market-index URL
-
+- Release 标题/正文与发布流程规则见 [docs/release-notes-style.md](docs/release-notes-style.md)
 ## 许可证
 
 [BSD-3-Clause](LICENSE)
