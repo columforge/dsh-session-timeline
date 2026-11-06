@@ -127,42 +127,71 @@ export const GLOBAL_BUCKET = '__global__'
 
 interface FrameRange { start: number; end: number }
 
+/** Frame header parse result: where the block area starts + whether the frame
+ *  carries a 4-byte checksum after its last block. */
+interface FrameHeader { end: number; checksum: boolean }
+
+/** Decoded frame descriptor (zstd RFC §3.1.1): the variable header field byte
+ *  counts and the checksum flag. Pure bit decoding, no bounds checks. */
+function decodeFrameDescriptor(descriptor: number): { windowDescriptorByte: number; dictionaryBytes: number; contentSizeBytes: number; checksum: boolean } {
+  const contentSizeFlag = descriptor >>> 6
+  const singleSegment = (descriptor & 0x20) !== 0
+  const checksum = (descriptor & 0x04) !== 0
+  const dictionaryFlag = descriptor & 0x03
+  const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag
+  const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag
+  return { windowDescriptorByte: singleSegment ? 0 : 1, dictionaryBytes, contentSizeBytes, checksum }
+}
+
+/** Parse the frame header at `offset` (magic, frame descriptor, optional
+ *  window/dictionary/content-size fields). Null = invalid or header-truncated
+ *  (reserved bits set, not enough bytes) — the caller stops at this frame. */
+function readFrameHeader(buffer: Buffer, offset: number): FrameHeader | null {
+  if (buffer.length - offset < 4 || buffer.readUInt32LE(offset) !== ZSTD_MAGIC) return null
+  offset += 4
+  if (offset >= buffer.length) return null
+  const descriptor = buffer.readUInt8(offset)
+  offset += 1
+  if ((descriptor & 0x18) !== 0) return null
+  const fields = decodeFrameDescriptor(descriptor)
+  const remainingHeaderBytes = fields.windowDescriptorByte + fields.dictionaryBytes + fields.contentSizeBytes
+  if (buffer.length - offset < remainingHeaderBytes) return null
+  return { end: offset + remainingHeaderBytes, checksum: fields.checksum }
+}
+
+/** Walk 3-byte block headers from `offset` to the frame's last block.
+ *  `torn` = the frame is cut short or carries a reserved block type —
+ *  the caller stops at this frame (offset is then meaningless). */
+function walkBlocks(buffer: Buffer, offset: number): { end: number; torn: boolean } {
+  for (;;) {
+    if (buffer.length - offset < 3) return { end: offset, torn: true }
+    const blockHeader = buffer.readUIntLE(offset, 3)
+    offset += 3
+    const lastBlock = (blockHeader & 1) !== 0
+    const blockType = (blockHeader >>> 1) & 0x03
+    const blockSize = blockHeader >>> 3
+    if (blockType === 0x03) return { end: offset, torn: true }
+    const payloadBytes = blockType === 0x01 ? 1 : blockSize
+    if (buffer.length - offset < payloadBytes) return { end: offset, torn: true }
+    offset += payloadBytes
+    if (lastBlock) return { end: offset, torn: false }
+  }
+}
+
+/** Tolerant frame scan: frame ranges of every complete frame; stops at the
+ *  first invalid/header-truncated frame or torn block walk (same boundary
+ *  as before the split — one big loop read header, blocks, checksum). */
 function scanZstdFrames(buffer: Buffer): FrameRange[] {
   const frames: FrameRange[] = []
   let offset = 0
   while (offset < buffer.length) {
     const start = offset
-    if (buffer.length - offset < 4 || buffer.readUInt32LE(offset) !== ZSTD_MAGIC) break
-    offset += 4
-    if (offset >= buffer.length) break
-    const descriptor = buffer.readUInt8(offset)
-    offset += 1
-    if ((descriptor & 0x18) !== 0) break
-    const contentSizeFlag = descriptor >>> 6
-    const singleSegment = (descriptor & 0x20) !== 0
-    const checksum = (descriptor & 0x04) !== 0
-    const dictionaryFlag = descriptor & 0x03
-    const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag
-    const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag
-    const remainingHeaderBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes
-    if (buffer.length - offset < remainingHeaderBytes) break
-    offset += remainingHeaderBytes
-    let torn = false
-    for (;;) {
-      if (buffer.length - offset < 3) { torn = true; break }
-      const blockHeader = buffer.readUIntLE(offset, 3)
-      offset += 3
-      const lastBlock = (blockHeader & 1) !== 0
-      const blockType = (blockHeader >>> 1) & 0x03
-      const blockSize = blockHeader >>> 3
-      if (blockType === 0x03) { torn = true; break }
-      const payloadBytes = blockType === 0x01 ? 1 : blockSize
-      if (buffer.length - offset < payloadBytes) { torn = true; break }
-      offset += payloadBytes
-      if (lastBlock) break
-    }
-    if (torn) break
-    if (checksum) {
+    const header = readFrameHeader(buffer, offset)
+    if (header === null) break
+    const blocks = walkBlocks(buffer, header.end)
+    if (blocks.torn) break
+    offset = blocks.end
+    if (header.checksum) {
       if (buffer.length - offset < 4) break
       offset += 4
     }
