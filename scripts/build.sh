@@ -39,6 +39,13 @@ link_pkg() {
     const path = require('path');
     const link = path.resolve(process.argv[1]);
     const target = path.resolve(process.argv[2]);
+    // Idempotent guard: an existing link that already resolves to the target
+    // stays untouched. Mutator worker overlays link node_modules into the
+    // worker, so an unconditional rm+recreate here would write through the
+    // link into the real tree and race across parallel workers.
+    try {
+      if (fs.realpathSync(link) === fs.realpathSync(target)) process.exit(0);
+    } catch { /* absent or dangling: (re)create below */ }
     fs.rmSync(link, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
@@ -47,7 +54,6 @@ link_pkg() {
 
 echo "=== Linking build dependencies (checkout: $CHECKOUT) ==="
 mkdir -p node_modules/@deepseek-ai
-node -e "const fs=require('fs');fs.rmSync('node_modules/@standard-schema',{recursive:true,force:true})"
 link_pkg cordis vendor/cordis
 link_pkg cosmokit vendor/cosmokit
 link_pkg schemastery vendor/schemastery
@@ -58,15 +64,27 @@ link_pkg @deepseek-ai/dsh-host-webserver packages/host/webserver
 # @types/node (compile-time types; the checkout ships them)
 link_pkg @types/node node_modules/@types/node
 
+# @standard-schema: recreate the spec link only when it does not already
+# resolve to the checkout's copy. Unconditional rm+recreate here races with
+# parallel mutator workers (their node_modules is a link into the real tree)
+# and can break a concurrent build, which mutation testing then miscounts
+# as a killed mutant.
 STD_SCHEMA=$(find "$CHECKOUT/node_modules/.pnpm" -maxdepth 1 -type d -iname '@standard-schema+spec@*' 2>/dev/null | head -1)
 if [ -n "$STD_SCHEMA" ]; then
   node -e "
     const fs = require('fs');
     const path = require('path');
+    const expected = fs.realpathSync(path.resolve(process.argv[1]));
+    try {
+      if (fs.realpathSync(path.resolve('node_modules/@standard-schema/spec')) === expected) process.exit(0);
+    } catch { /* absent or dangling: (re)create below */ }
     fs.rmSync('node_modules/@standard-schema', { recursive: true, force: true });
     fs.mkdirSync('node_modules/@standard-schema', { recursive: true });
-    fs.symlinkSync(path.resolve(process.argv[1]), path.resolve('node_modules/@standard-schema/spec'), process.platform === 'win32' ? 'junction' : 'dir');
+    fs.symlinkSync(expected, path.resolve('node_modules/@standard-schema/spec'), process.platform === 'win32' ? 'junction' : 'dir');
   " "$STD_SCHEMA/node_modules/@standard-schema/spec"
+else
+  # No pnpm-layout copy found: clear a possibly dangling link (old behavior).
+  node -e "const fs=require('fs');fs.rmSync('node_modules/@standard-schema',{recursive:true,force:true})"
 fi
 
 echo "=== Compiling host src → lib ==="
