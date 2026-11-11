@@ -8,7 +8,7 @@ CRAP (complexity × coverage), duplication (dryer), and mutation testing (mutato
 
 | Area | Gate | Why |
 | --- | --- | --- |
-| `src/parse.ts`, `src/lineage-infer.ts`, `src/geometry/*` | CRAP < 10 | Pure logic; the plugin's lineage/parse/geometry rules; unit-tested directly. |
+| `src/parse.ts`, `src/lineage-infer.ts`, `src/geometry/*`, `src/turns.ts` | CRAP < 10 | Pure logic; the plugin's lineage/parse/geometry/turn-attribution rules; unit-tested directly. |
 | `src/**/*.ts` | duplication score < 0.82 | Whole tree; UI duplication counts too. |
 | `src/index.ts` (host routes, zstd scan, caches) | partially gated | Route tests exist (test/routes.test.mjs) and the zstd scan region is compliant (readFrameHeader 6.0 / decodeFrameDescriptor 5.0 / walkBlocks 7.0 / scanZstdFrames 6.0). Sole blocker: `apply` (CC 196) — decomposition approved (L1 pure scanners + L2 assembly shell, all ≤10); include the whole file at threshold 10 once it lands. |
 | `src/client/index.ts` (panel UI, 1.5k lines) | not gated yet | No DOM/unit coverage. CRAP there is coverage arithmetic, not a design signal. Follow-up: extract pure helpers (errorText/interpolate/formatters) into a tested module, then include them. |

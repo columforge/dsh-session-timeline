@@ -46,7 +46,7 @@ fi
 "${C8[@]}" --reporter=lcov --reports-dir target/coverage/typescript node --test test/*.test.mjs
 
 echo '== CRAP gate (ub-mode: every targeted function < 10) =='
-"$CRAPPER" --use-existing-coverage src/parse.ts src/lineage-infer.ts src/geometry --threshold 10
+"$CRAPPER" --use-existing-coverage src/parse.ts src/lineage-infer.ts src/geometry src/turns.ts --threshold 10
 
 echo '== duplication gate (ub-mode: no pair scoring >= 0.82) =='
 DRY_OUT="$("$DRYER" --threshold 0.82 src)"

@@ -4,7 +4,9 @@
  * for the header (createdAt / parentSession / isSeeded / cwd), the first real
  * user message time (creation-time criterion), the last session/title, and
  * handoff skill invocations (user/message + source.kind=skill-invocation +
- * name=handoff; seq/time/turn each — parsing in ./parse).
+ * name=handoff; seq/time/turn each — parsing in ./parse). Turn dialogs for
+ * /turns extract in ./turns (single source of the turn-attribution rules,
+ * served through an mtime+size cache).
  * Top-level sessions (session- prefixed id) are timeline nodes; parentSession
  * pointing at an in-bucket top-level session forms a native edge — one child
  * = handoff link, multiple children = branch. Native forks stopped writing
@@ -42,6 +44,8 @@ import { zstdDecompressSync } from 'node:zlib'
 import z from 'schemastery'
 import { parseLog, signatureLog } from './parse.js'
 import type { HandoffHit, EventSignature } from './parse.js'
+import { extractTurns } from './turns.js'
+import type { TurnScan } from './turns.js'
 import { inferForkParents } from './lineage-infer.js'
 
 export const name = '@columforge/session-timeline'
@@ -378,6 +382,14 @@ export function apply(ctx: Context, config: Config): void {
     return sig
   }
 
+  /** Turn-dialog scan cache for /turns (mtime+size keyed like the parse
+   *  cache; FIFO-capped — full-dialog scans are far heavier than signature
+   *  scans, and decode failures cache too so a corrupt log decompresses once
+   *  per file state, not once per request). */
+  interface TurnsEntry { mtimeMs: number; size: number; scan: TurnScan | null }
+  const turnsCache = new Map<string, TurnsEntry>()
+  const TURNS_CACHE_CAP = 64
+
   /** Native forks stopped writing header.parentSession (DSH v0.2.2-alpha.2),
    *  so header lineage alone misses every new fork. For children with an own
    *  fork marker whose header parent is absent/out-of-bucket, recover the
@@ -684,73 +696,27 @@ export function apply(ctx: Context, config: Config): void {
           return
         }
         try {
-          const text = decompressLog(readFileSync(join(dir, SESSION_FILE)))
-          if (text === null) { json(res, 500, failPayload({ code: 'decodeFailed', text: '会话日志解码失败' })); return }
-          /** 4000-char clip; the truncation marker is rendered client-side from the
-           *  clipped flag so it follows the configured language. */
-          const clip = (t: string): { text: string; clipped: boolean } => t.length > 4000
-            ? { text: t.slice(0, 4000), clipped: true }
-            : { text: t, clipped: false }
-          interface Turn {
-            user: string
-            assistant: string
-            at: number
-            userClipped?: boolean
-            assistantClipped?: boolean
-            assistantReasoning?: boolean
-          }
-          const turns: Turn[] = []
-          /** Turns containing a handoff skill call (1-based); same-turn calls deduplicated. */
-          const handoffTurnSet = new Set<number>()
-          let pos = 0
-          for (;;) {
-            const nl = text.indexOf('\n', pos)
-            const lineEnd = nl < 0 ? text.length : nl
-            const raw = text.slice(pos, lineEnd)
-            pos = nl < 0 ? text.length : nl + 1
-            if (raw.length > 2 && (raw.includes('"user/message"') || raw.includes('"assistant/message"'))) {
-              try {
-                const ev = JSON.parse(raw) as { type?: unknown; time?: unknown; data?: { source?: { kind?: unknown; name?: unknown }; content?: { type?: unknown; text?: unknown }[] } }
-                if (ev?.type === 'user/message' && ev?.data?.source?.kind === 'user' && Array.isArray(ev.data.content)) {
-                  const t = ev.data.content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => String(c.text)).join('\n')
-                  const clipped = clip(t)
-                  turns.push({ user: clipped.text, userClipped: clipped.clipped, assistant: '', at: typeof ev.time === 'number' ? ev.time : 0 })
-                } else if (ev?.type === 'user/message'
-                  && ev?.data?.source?.kind === 'skill-invocation'
-                  && ev?.data?.source?.name === 'handoff') {
-                  /* Call lines belong to the turn already open; with no user
-                   * message yet (turns.length === 0) there is nothing to show — skip. */
-                  if (turns.length > 0) handoffTurnSet.add(turns.length)
-                } else if (ev?.type === 'assistant/message' && turns.length > 0) {
-                  // A turn may have several assistant outputs (tool-call segments):
-                  // keep the last formal reply; fall back to the last reasoning
-                  // when the turn has none.
-                  const cur = turns[turns.length - 1]
-                  const msg = ev.data as { message?: { content?: { type?: unknown; text?: unknown }[] } } | undefined
-                  const blocks = Array.isArray(msg?.message?.content) ? msg.message.content : []
-                  const text = blocks.filter((c) => c?.type === 'text' && typeof c.text === 'string')
-                    .map((c) => String(c.text)).join('\n').trim()
-                  if (text !== '') {
-                    const clipped = clip(text)
-                    cur.assistant = clipped.text
-                    cur.assistantClipped = clipped.clipped
-                    // Formal text replaces the reasoning fallback: the flag must
-                    // follow the content, or a turn with a real reply stays
-                    // labelled "reasoning".
-                    cur.assistantReasoning = false
-                  } else if (cur.assistant === '') {
-                    const reasoning = blocks.filter((c) => c?.type === 'reasoning' && typeof c.text === 'string')
-                      .map((c) => String(c.text)).join('\n').trim()
-                    if (reasoning !== '') {
-                      cur.assistant = reasoning
-                      cur.assistantReasoning = true
-                    }
-                  }
-                }
-              } catch { /* skip bad line */ }
+          /* mtime+size cache: the detail view re-requests turns on every node
+           * select and every bar click; each miss used to decompress the whole
+           * log. Same staleness contract as parseCache (mtime+size, content
+           * changes at equal size+mtime are invisible by design). */
+          const file = join(dir, SESSION_FILE)
+          const st = statSync(file)
+          const cached = turnsCache.get(dir)
+          let scan: TurnScan | null
+          if (cached !== undefined && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+            scan = cached.scan
+          } else {
+            const text = decompressLog(readFileSync(file))
+            scan = text === null ? null : extractTurns(text)
+            if (turnsCache.size >= TURNS_CACHE_CAP) {
+              const oldest = turnsCache.keys().next()
+              if (!oldest.done) turnsCache.delete(oldest.value)
             }
-            if (nl < 0) break
+            turnsCache.set(dir, { mtimeMs: st.mtimeMs, size: st.size, scan })
           }
+          if (scan === null) { json(res, 500, failPayload({ code: 'decodeFailed', text: '会话日志解码失败' })); return }
+          const turns = scan.turns
           if (turns.length === 0) { json(res, 200, { ok: true, turns: 0, handoffTurns: [] }); return }
           /* Single turn on demand (clicking any turn bar): GET /turns&turn=N → that turn's dialog. */
           const wantTurn = Number(query.get('turn') ?? '')
@@ -764,7 +730,7 @@ export function apply(ctx: Context, config: Config): void {
             first: turns[0],
             last: turns[turns.length - 1],
             /* Full dialog of handoff-skill turns (user/assistant, same 4000-char clip). */
-            handoffTurns: [...handoffTurnSet].sort((a, b) => a - b)
+            handoffTurns: scan.handoffTurns
               .filter((turn) => turn >= 1 && turn <= turns.length)
               .map((turn) => ({ turn, ...turns[turn - 1] })),
           })

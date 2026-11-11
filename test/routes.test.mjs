@@ -340,6 +340,30 @@ test('/turns：非 zstd 会话文件 500 + decodeFailed', async () => {
   }
 })
 
+test('/turns：mtime+size 缓存——同 mtime 改内容（尺寸变）必取新值；mtime 前进再取新值', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'stl-routes-'))
+  try {
+    writeSession(home, BUCKET_A, 'session-t16', [header('session-t16'), userMsg(1, 1100, '第一版')])
+    const file = join(home, 'sessions', BUCKET_A, 'session-t16', 'session.v4.jsonl.zstd')
+    const handler = boot(home)
+    const v1 = await call(handler, '/session-timeline/api/turns?session=session-t16')
+    assert.equal(v1.data.first.user, '第一版')
+    // Same mtime, different content (different compressed size): size still
+    // triggers a re-read — the cache must not hide content changes.
+    const { mtimeMs } = statSync(file)
+    writeSession(home, BUCKET_A, 'session-t16', [header('session-t16'), userMsg(1, 1100, '第二版·内容变长了一些')])
+    utimesSync(file, new Date(mtimeMs), new Date(mtimeMs))
+    const v2 = await call(handler, '/session-timeline/api/turns?session=session-t16')
+    assert.equal(v2.data.first.user, '第二版·内容变长了一些')
+    // mtime advance: another re-read, new content again.
+    writeSession(home, BUCKET_A, 'session-t16', [header('session-t16'), userMsg(1, 1100, '第三版')])
+    const v3 = await call(handler, '/session-timeline/api/turns?session=session-t16')
+    assert.equal(v3.data.first.user, '第三版')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 /* ---- /workspaces ---- */
 
 test('/workspaces：count 只数 session- 前缀、newest 含子会话、cwd 取第一个可解析、newest 降序', async () => {

@@ -4,7 +4,9 @@
  * for the header (createdAt / parentSession / isSeeded / cwd), the first real
  * user message time (creation-time criterion), the last session/title, and
  * handoff skill invocations (user/message + source.kind=skill-invocation +
- * name=handoff; seq/time/turn each — parsing in ./parse).
+ * name=handoff; seq/time/turn each — parsing in ./parse). Turn dialogs for
+ * /turns extract in ./turns (single source of the turn-attribution rules,
+ * served through an mtime+size cache).
  * Top-level sessions (session- prefixed id) are timeline nodes; parentSession
  * pointing at an in-bucket top-level session forms a native edge — one child
  * = handoff link, multiple children = branch. Native forks stopped writing

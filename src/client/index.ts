@@ -17,6 +17,25 @@
  * predecessor); any handoff invocation with no successor → gold frame
  * (awaiting successor); the detail pane lists each invocation's
  * turn/time/message seq.
+ * Copy discipline (layout-first): the layout carries the explanation — colors,
+ * frames, arrows and glyphs name the states, so visible text stays limited to
+ * the bare color key, two non-obvious interaction hints and pure data; group
+ * labels and secondary descriptions are avoided (statuses keep hover tooltips).
+ * Live strip (P2): when the inspected node IS the session the conversation shows
+ * (props.sessionId — the tab is session-scoped), the panel subscribes to the
+ * official turnOutline projection and re-reads /turns on observed growth, so a
+ * running session's bars/handoff gold keep up without re-selecting the node.
+ * Bar numbering stays on /turns (outline turns are turn/start-based and can
+ * disagree with user-message turns on seeded openings). Locate (P3, every
+ * session): the detail button switches the conversation to the inspected
+ * node's session, pages history back through the turn's seq (outline
+ * turn/start for the current session, /turns user-message seq otherwise) with
+ * the official loadThrough, then scrolls to the chat navigation anchor
+ * (TurnNavigationItem.anchorKey) for that turn. The assistant dialog renders
+ * through the conversation's own MarkdownText so the panel reads like the
+ * chat (user prompts stay plain text, as in the chat). Every step degrades to
+ * a no-op when a service/projection/DOM anchor is absent; off-session the
+ * panel keeps its panel-only behavior.
  * Double-click a node = switch to that session. The workspace select carries a
  * third mode "all workspaces" (the __global__ sentinel): one canvas of
  * per-workspace fishbone lanes stacked vertically on a shared ordinal column
@@ -59,6 +78,34 @@ const P = require('@deepseek-ai/dsh-client-ui-primitives') as {
   Button: (props: Record<string, unknown>) => unknown
   Tag: (props: { tone?: string; children?: unknown }) => unknown
   IconBranchOutlineRegular: (props: { size?: number }) => unknown
+  /** The conversation's own Markdown renderer (settled mode): GFM + TeX, safe links, code fences. */
+  MarkdownText: (props: { text: string; labels: MarkdownLabelsView; streaming?: boolean }) => unknown
+}
+
+/** Markdown chrome copy (fence toolbar + footnotes) the primitives renderer needs. */
+interface MarkdownLabelsView {
+  code: {
+    copyLabel: string
+    copiedLabel: string
+    toolbarLabels: { codeLabel: string; wrapLabel: string; unwrapLabel: string }
+  }
+  footnotes: string
+}
+
+/** Labels builder for one locale revision (identity-stable per t; the renderer memoizes on it). */
+function markdownLabelsOf(t: Translate): MarkdownLabelsView {
+  return {
+    code: {
+      copyLabel: t('markdown.copy'),
+      copiedLabel: t('markdown.copied'),
+      toolbarLabels: {
+        codeLabel: t('markdown.codeBlock'),
+        wrapLabel: t('markdown.wrap'),
+        unwrapLabel: t('markdown.unwrap'),
+      },
+    },
+    footnotes: t('markdown.footnotes'),
+  }
 }
 
 const API_BASE = '/session-timeline/api'
@@ -123,6 +170,73 @@ function setArchiveView(value: ArchiveMode): void {
 }
 function subscribeArchiveView(listener: () => void): () => void {
   return subscribeTo(archiveView.listeners, listener)
+}
+
+/* ---- P2/P3: live turn outline (official turnOutline projection) + jump-to-conversation ---- */
+
+/** One `turnOutline` entry (whole-log turn outline served by the official session-turn-outline
+ *  projection): `seq` is the turn's `turn/start` event seq — the official load-through target
+ *  for a turn jump; prompt/response are bounded previews (50/120 chars). */
+interface OutlineTurn {
+  turn: number
+  seq: number
+  prompt: string
+  response: string
+}
+
+/** Structural faces of the client services P2/P3 touch (resolved via ctx.get, absent-safe). */
+interface ProjectionFace {
+  getSnapshot: () => unknown
+  subscribe: (listener: () => void) => () => void
+}
+interface SessionBindingFace {
+  session: {
+    projections: { faceOf: (key: string) => ProjectionFace }
+    loadThrough: (seq: number) => Promise<void>
+  }
+}
+interface SessionsFace {
+  binding?: (id: string) => SessionBindingFace | undefined
+}
+interface ChatTargetSnapshot {
+  navigation?: { items: () => readonly { turn: number; anchorKey: string }[] }
+}
+interface ConversationBindingFace {
+  activate?: (view: string) => void
+  target?: (view: 'chat') => ProjectionFace & { getSnapshot: () => ChatTargetSnapshot | undefined }
+}
+interface ConversationsFace {
+  binding?: (id: string) => ConversationBindingFace | undefined
+}
+
+/** CSS.escape without assuming the API (attribute selectors carry session ids). */
+function cssEscape(value: string): string {
+  const escape = (globalThis as { CSS?: { escape?: (v: string) => string } }).CSS?.escape
+  if (typeof escape === 'function') return escape(value)
+  return value.replace(/["\\]/g, '\\$&')
+}
+
+/** The rendered conversation row for one chat anchor key, scoped to this session's scrollport
+ *  when the DOM carries the scope attribute; falls back to the page's only scrollport. */
+function findChatRow(sessionId: string, anchorKey: string): HTMLElement | null {
+  const scopes: Element[] = []
+  for (const el of Array.from(document.querySelectorAll('[data-conversation-session="' + cssEscape(sessionId) + '"] [data-conversation-scroll]'))) scopes.push(el)
+  if (scopes.length === 0) for (const el of Array.from(document.querySelectorAll('[data-conversation-scroll]'))) scopes.push(el)
+  for (const scope of scopes) {
+    for (const el of Array.from(scope.querySelectorAll('[data-chat-node-key]'))) {
+      if ((el as HTMLElement).dataset.chatNodeKey === anchorKey) return el as HTMLElement
+    }
+  }
+  return null
+}
+
+/** Scroll the conversation so `row` sits 12px below the scrollport top (jump landing). */
+function scrollRowIntoView(row: HTMLElement): void {
+  const scrollport = row.closest('[data-conversation-scroll]') as HTMLElement | null
+  if (scrollport === null) { row.scrollIntoView({ block: 'center' }); return }
+  const spRect = scrollport.getBoundingClientRect()
+  const rowRect = row.getBoundingClientRect()
+  scrollport.scrollTop = scrollport.scrollTop + (rowRect.top - spRect.top) - 12
 }
 
 /** The panel's lane view (all-workspaces canvas): collapsed lane ids + hidden lane ids.
@@ -212,6 +326,8 @@ type Ctx = {
     bind: (ns: string) => Translate
     register: (ns: string, dicts: Record<string, Record<string, string>>) => unknown
   }
+  /** Structural client-service access (sessions / uiConversation): optional, resolved at use. */
+  get?: (key: string) => unknown
   effect: (fn: () => void, label?: string) => unknown
 }
 
@@ -238,12 +354,6 @@ function fmt(ms: number): string {
 function fmtDate(ms: number): string {
   const d = new Date(ms)
   return String(d.getFullYear()) + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-}
-
-function fmtFull(ms: number): string {
-  const d = new Date(ms)
-  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
-    pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
 }
 
 function listUrl(workspace: string | undefined, sessionId: string | undefined): string {
@@ -322,23 +432,11 @@ const legendTag = (label: string): unknown =>
   h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
     h(P.Tag, { tone: 'info' }, 'handoff'),
     h('span', null, label))
-
-/* Empty-state legend row: group label + "action = meaning" items; wraps in narrow columns (instead of a wall of text). */
-const legendRow = (label: string, items: unknown[]): unknown =>
-  h('div', { key: label, style: { display: 'flex', alignItems: 'flex-start', gap: 8 } },
-    h('span', {
-      style: {
-        flexShrink: 0, fontSize: 10.5, lineHeight: '18px', padding: '0 6px', borderRadius: 4,
-        border: '1px solid var(--dsw-alias-border-primary, rgba(128,128,128,0.3))',
-        color: DIM, whiteSpace: 'nowrap',
-      },
-    }, label),
-    h('span', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 12px', minWidth: 0 } }, items))
-/** One item: action word (accent foreground) = meaning (secondary color). */
+/** One hint item: action → result. The arrow carries the relation; no group labels, no "=". */
 const legendItem = (action: string, meaning: string): unknown =>
   h('span', { key: action, style: { display: 'inline-flex', alignItems: 'baseline', gap: 4 } },
     h('span', { style: { color: AXIS } }, action),
-    h('span', { style: { color: DIM } }, '='),
+    h('span', { style: { color: DIM } }, '→'),
     h('span', null, meaning))
 
 /** Render error boundary: shows the error text instead of a blank panel. */
@@ -361,9 +459,11 @@ class PanelBoundary extends React.Component<{ children?: unknown }, { error: Err
   }
 }
 
-function PanelBody(props: { sessionId?: string; openSession: (id: string) => void; t?: Translate }): unknown {
-  const { sessionId, openSession } = props
+function PanelBody(props: { sessionId?: string; openSession: (id: string) => void; t?: Translate; ctx?: Ctx }): unknown {
+  const { sessionId, openSession, ctx } = props
   const t: Translate = props.t ?? T
+  /* Markdown renderer labels: identity-stable per locale revision (memo deps [t]). */
+  const mdLabels = useMemo(() => markdownLabelsOf(t), [t])
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null)
   const [workspace, setWorkspace] = useState<string | undefined>(undefined)
   const [snap, refresh] = useSnapshot(t, workspace, sessionId)
@@ -544,10 +644,16 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const [selTurn, setSelTurn] = useState<number>(1)
   const [turnsData, setTurnsData] = useState<{ turns: number; first?: TurnView; last?: TurnView; handoffTurns?: HandoffTurnView[] } | null>(null)
   const [fetchedTurns, setFetchedTurns] = useState<Map<number, TurnView>>(new Map())
+  /** Selection/workspace change resets the dialog cache and the page cursor. */
   useEffect(() => {
     setTurnsData(null)
     setFetchedTurns(new Map())
     setSelTurn(1)
+  }, [selected, workspace])
+  /** Fetch (and on outline growth, re-fetch) the selected session's turn scan. Two effects keep the
+   *  live refresh flash-free: an epoch bump re-reads /turns without clearing the bars first. */
+  const [turnsEpoch, setTurnsEpoch] = useState(0)
+  useEffect(() => {
     if (selected === null) return
     const q = new URLSearchParams({ session: selected })
     if (workspace !== undefined) q.set('workspace', workspace)
@@ -559,7 +665,93 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       .catch(() => { /* stay null; UI shows the loading-failed placeholder */ })
       .finally(() => clearTimeout(tid))
     return () => { ctrl.abort() }
-  }, [selected, workspace])
+  }, [selected, workspace, turnsEpoch])
+
+  /* ---- P2: live turn outline of the CURRENT session ----
+   * The sidebar tab is session-scoped, so props.sessionId is the session the conversation shows.
+   * When the inspected node IS that session, subscribe to the official `turnOutline` projection
+   * (whole log, identity-gated change feed): its growth is the signal that /turns must be re-read
+   * so the bars/count/handoff gold follow a running session without re-selecting the node.
+   * Bar numbering stays on the /turns source — outline turns are turn/start-based and may not
+   * index-align with user-message turns (a seeded opening has no real user message). */
+  const isCurrentSession = selected !== null && sessionId !== undefined && selected === sessionId
+  const [outline, setOutline] = useState<readonly OutlineTurn[] | null>(null)
+  useEffect(() => {
+    setOutline(null)
+    if (!isCurrentSession || sessionId === undefined || ctx?.get === undefined) return
+    let face: ProjectionFace | undefined
+    try {
+      const sessions = ctx.get('sessions') as SessionsFace | undefined
+      face = sessions?.binding?.(sessionId)?.session.projections.faceOf('turnOutline')
+    } catch { face = undefined }
+    if (face === undefined) return
+    const read = (): void => {
+      const value = face.getSnapshot()
+      setOutline(Array.isArray(value) ? (value as OutlineTurn[]) : null)
+    }
+    read()
+    return face.subscribe(read)
+  }, [isCurrentSession, sessionId, ctx])
+  /** One /turns refresh per observed turn growth; bounded by the outline's change feed (per turn). */
+  useEffect(() => {
+    if (!isCurrentSession || outline === null) return
+    const known = turnsData?.turns ?? 0
+    if (outline.length > known) setTurnsEpoch((epoch) => epoch + 1)
+  }, [outline, isCurrentSession, turnsData?.turns])
+
+  /* ---- P3: jump the conversation to the selected turn (every session) ----
+   * The jump target prefers the official turnOutline seq (a turn's turn/start — the documented
+   * load-through target) and falls back to the /turns user-message seq: the projection only
+   * exists for retained sessions, so non-current sessions rely on the file-side seq. The
+   * conversation switches to the target session first (openSession retains it), then the
+   * session face pages history back through the seq (loadThrough), and the chat navigation
+   * index names the anchor key the conversation scrolls to. Every step degrades to a no-op
+   * (service/projection/DOM absent), so the panel never depends on the workspace shell. */
+  const [jumping, setJumping] = useState(false)
+  const conversationOf = (target: string): ConversationBindingFace | undefined => {
+    try { return (ctx?.get?.('uiConversation') as ConversationsFace | undefined)?.binding?.(target) } catch { return undefined }
+  }
+  const sessionFaceOf = (target: string): SessionBindingFace | undefined => {
+    try { return (ctx?.get?.('sessions') as SessionsFace | undefined)?.binding?.(target) } catch { return undefined }
+  }
+  /** Jump anchor for one turn: outline turn/start seq first, /turns user-message seq otherwise. */
+  const locateSeqFor = (turn: number): number | undefined => {
+    const outlineSeq = isCurrentSession ? outline?.find((item) => item.turn === turn)?.seq : undefined
+    if (outlineSeq !== undefined) return outlineSeq
+    const turnSeq = turnContent(turn)?.seq
+    return typeof turnSeq === 'number' && turnSeq >= 0 ? turnSeq : undefined
+  }
+  const jumpToTurn = (turn: number): void => {
+    if (jumping || selected === null) return
+    const target = selected
+    const seq = locateSeqFor(turn)
+    if (seq === undefined) return
+    setJumping(true)
+    try { openSession(target) } catch { /* reveal best-effort */ }
+    const scrollPoll = (left: number): void => {
+      const items = conversationOf(target)?.target?.('chat')?.getSnapshot()?.navigation?.items?.() ?? []
+      const anchor = items.find((item) => item.turn === turn)?.anchorKey
+      if (anchor !== undefined) {
+        const row = findChatRow(target, anchor)
+        if (row !== null) { scrollRowIntoView(row); setJumping(false); return }
+      }
+      if (left <= 0) { setJumping(false); return }
+      requestAnimationFrame(() => scrollPoll(left - 1))
+    }
+    // Switching sessions retains the target; its binding (and face) materializes after the
+    // switch settles, so poll briefly instead of assuming a synchronous retain.
+    const facePoll = (left: number): void => {
+      const face = sessionFaceOf(target)
+      if (face !== undefined) {
+        try { conversationOf(target)?.activate?.('chat') } catch { /* the shell keeps its view */ }
+        face.session.loadThrough(seq).then(() => scrollPoll(60)).catch(() => setJumping(false))
+        return
+      }
+      if (left <= 0) { setJumping(false); return }
+      requestAnimationFrame(() => facePoll(left - 1))
+    }
+    facePoll(40)
+  }
 
   /** Turn T's dialog: first/last/handoff turns ship with /turns; the rest come from the on-demand cache. */
   const turnContent = (turn: number): TurnView | undefined => {
@@ -696,16 +888,18 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
   const sel = selected !== null ? byId.get(selected) : undefined
   const selManualIn = sel !== undefined ? manualLinks.filter((l) => l.to === sel.id) : []
   const selManualOut = sel !== undefined ? manualLinks.filter((l) => l.from === sel.id) : []
-  /* Merged-chain narration: successors = native out-edges + manual out-edges (shared by the detail
-   * "links to" row; manual out-edges carry an unlink ref for the inline disconnect button). */
+  /* Merged-chain narration: successors = native out-edges + manual out-edges. Flags (branch
+   * display / manual origin) drive the arrow row's color and ⑂ glyph; manual out-edges carry
+   * an unlink ref for the inline disconnect button. */
   const selOut = sel !== undefined
     ? [
         ...edges.filter((e) => e.from === sel.id).map((e) => ({
           id: e.to,
-          mark: displayKind(e, degree) === 'branch' ? t('edge.kind.branch') : '',
+          branch: displayKind(e, degree) === 'branch',
+          manual: false,
           unlink: null as { from: string; to: string } | null,
         })),
-        ...selManualOut.map((l) => ({ id: l.to, mark: t('edge.kind.manual'), unlink: { from: l.from, to: l.to } as { from: string; to: string } | null })),
+        ...selManualOut.map((l) => ({ id: l.to, branch: false, manual: true, unlink: { from: l.from, to: l.to } as { from: string; to: string } | null })),
       ]
     : []
   const titleOf = (id: string): string => byId.get(id)?.title ?? shortId(id)
@@ -713,12 +907,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     const tail = w.cwd !== null && w.cwd !== '' ? w.cwd.split('/').filter(Boolean).pop() ?? w.cwd : w.bucket
     return tail + t('fmt.count', { count: w.sessions })
   }
-  /* Stats criterion = link display kind (merged out-degree), matching the actual canvas
-   * colors; in lane mode only edges whose both ends are on the canvas count. */
-  const onCanvas = (id: string): boolean => lanesLayout === null || lanesLayout.colOf.has(id)
-  const handoffCount = edges.filter((e) => displayKind(e, degree) === 'handoff' && onCanvas(e.from) && onCanvas(e.to)).length
-  const branchCount = edges.filter((e) => displayKind(e, degree) === 'branch' && onCanvas(e.from) && onCanvas(e.to)).length
-  const manualCount = manualLinks.filter((l) => onCanvas(l.from) && onCanvas(l.to)).length
+  /* Stats copy: none. The canvas already shows session count (tab title), lineage kinds (colors)
+   * and archived sessions (dashed frames); only the genuinely invisible unreadable-log count
+   * surfaces as a dim warning. */
 
   const nodeCard = (n: SNode): unknown => {
     const i = (lanesLayout !== null ? (lanesLayout.colOf.get(n.id) ?? 0) : (layout.colOf.get(n.id) ?? 0))
@@ -782,7 +973,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         openSession(n.id)
       },
     },
-      h('div', { style: { color: DIM, fontSize: 10.5, fontFamily: MONO } }, fmt(displayAt(n))),
+      h('div', { style: { color: DIM, fontSize: 10.5, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' } }, fmt(displayAt(n))),
       h('div', {
         style: {
           fontSize: 12,
@@ -796,13 +987,11 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       }, n.title ?? t('node.untitled')),
       h('div', { style: { display: 'flex', gap: 4, marginTop: 'auto', flexWrap: 'wrap' } },
         /* The "handoff" tag = handoff skill invoked or opened from a handoff seed;
-         * never by "handoff" text in the first message (would mislabel sessions discussing handoff). */
+         * never by "handoff" text in the first message (would mislabel sessions discussing handoff).
+         * Awaiting/archived states keep their frame colors (purple/gold/dashed) — no duplicate word tags. */
         (n.seeded || n.handoffUsed) ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
         kids >= 2 ? h(P.Tag, { tone: 'info' }, '⑂' + String(kids)) : null,
-        nudgeFirst ? h(P.Tag, { tone: 'info' }, t('node.tag.awaitParent')) : null,
-        nudgeLast ? h(P.Tag, { tone: 'warning' }, t('node.tag.awaitChild')) : null,
         n.parent !== null && !byId.has(n.parent) ? h(P.Tag, { tone: 'quiet' }, t('node.tag.externalParent')) : null,
-        n.archived === true ? h(P.Tag, { tone: 'quiet' }, t('node.tag.archived')) : null,
         isGlobal ? h(P.Tag, { tone: 'quiet' }, bucketTail(n.bucket)) : null,
       ),
     )
@@ -1139,12 +1328,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
           ),
         ) : null,
       ) : null,
-      h('span', null,
-        t('stats.summary', { sessions: renderNodes.length, handoff: handoffCount, branch: branchCount, manual: manualCount }) +
-        ((snap.sessions ?? []).some((n) => n.archived === true)
-          ? ' · ' + t('stats.archived', { count: (snap.sessions ?? []).filter((n) => n.archived === true).length })
-          : '') +
-        ((snap.unreadable ?? 0) > 0 ? ' ' + t('stats.unreadable', { count: snap.unreadable ?? 0 }) : '')),
+      (snap.unreadable ?? 0) > 0
+        ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, t('stats.unreadable', { count: snap.unreadable ?? 0 }))
+        : null,
       msg !== null ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, msg) : null,
       h('span', { style: { marginLeft: 'auto' } },
         h(P.Button, {
@@ -1229,36 +1415,23 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         ),
       ),
     ),
-    /* Detail pane: no selection = actions + legend (link swatches / frames & tags) + one-line layout note. */
+    /* Detail pane: no selection = two terse lines. Line 1: the two non-obvious interactions;
+     * line 2: the bare color key (the canvas itself explains what each color/frame means).
+     * Visible panels (drag cursor, zoom controls, lane triangles) explain the rest. */
     sel === undefined
-      ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 } },
-          legendRow(t('legend.groupActions'), [
+      ? h('div', { style: { color: DIM, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 7 } },
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '3px 16px' } },
             legendItem(t('legend.action.dragNode'), t('legend.meaning.manual')),
-            legendItem(t('legend.action.doubleClick'), t('legend.meaning.switchSession')),
-            legendItem(t('legend.action.click'), t('legend.meaning.details')),
-            legendItem(t('legend.action.dragEmpty'), t('legend.meaning.pan')),
-          ]),
-          legendRow(t('legend.groupCanvas'), [
-            legendItem(t('legend.action.wheel'), t('legend.meaning.scroll')),
-            legendItem(t('legend.action.zoom'), t('legend.meaning.zoomControls')),
-            legendItem(t('legend.action.laneToggle'), t('legend.meaning.laneToggle')),
-          ]),
-          legendRow(t('legend.groupLineage'), [
-            h('span', { key: 'def' }, t('legend.lineageDefinition')),
-            legendItem(t('legend.action.mergedCriteria'), t('legend.meaning.mergedChain')),
-          ]),
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
+            legendItem(t('legend.action.doubleClick'), t('legend.meaning.switchSession'))),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 16px' } },
             legendLine(ACCENT, false, t('legend.line.handoff')),
             legendLine(BRANCH, false, t('legend.line.branch')),
-            legendLine(MANUAL, true, t('legend.line.manual'))),
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 18px' } },
+            legendLine(MANUAL, true, t('legend.line.manual')),
             legendFrame(FIRST_NUDGE, t('legend.frame.awaitParent')),
             legendFrame(LAST_NUDGE, t('legend.frame.awaitChild')),
             legendFrame('var(--dsw-alias-border-primary, rgba(128,128,128,0.35))', t('legend.frame.archived'), true),
-            legendTag(t('legend.tag.handoff'))),
-          h('div', null,
-            t('legend.footer')))
-      : h('div', {
+            legendTag(t('legend.tag.handoff')))
+      ) : h('div', {
           title: t('detail.hint'),
           onWheel: (ev: React.WheelEvent): void => {
             if (turnsData === null || turnsData.turns === 0) return
@@ -1281,86 +1454,84 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
               sel.title ?? t('node.untitled')),
             h(P.Button, { variant: 'ghost', size: 'sm', onClick: (): void => openSession(sel.id) }, t('detail.open')),
           ),
-          h('div', { style: { color: DIM, fontSize: 11.5, fontFamily: MONO } },
-            [
-              shortId(sel.id),
-              t('detail.lastActive', { time: fmtFull(sel.lastAt) }),
-              t('detail.created', { time: fmt(sel.createdAt) }),
-              ...(sel.logCreatedAt > 0 && sel.logCreatedAt !== sel.createdAt
-                ? [t('detail.logCreated', { time: fmt(sel.logCreatedAt) })]
-                : []),
-              bucketTail(sel.bucket),
-              ...(sel.seeded ? [t('detail.seeded')] : []),
-              ...(sel.parentSource === 'inferred' ? [t('detail.forkInferred')] : []),
-              ...(sel.forkMarkerSeq !== null && sel.parent === null ? [t('detail.forkSourceMissing')] : []),
-              ...(sel.archived === true ? [t('detail.archived')] : []),
-            ].join(' · ')),
-          /* Lineage row = merged-chain predecessor narration: native parent (in/out of view) + manual
-           * in-edges (marked manual, inline disconnect); "root session" only when no predecessor at all.
-           * Branch marking follows the merged out-degree (parent successors ≥ 2). */
+          /* Time range line: creation → last activity. The arrow layout carries the meaning;
+           * the tooltip spells it out on demand. No id/bucket/status narration — the canvas
+           * already shows the workspace and state colors. */
+          h('div', {
+            title: t('detail.rangeHint'),
+            style: {
+              color: DIM, fontSize: 11.5, fontFamily: MONO, fontVariantNumeric: 'tabular-nums',
+              display: 'flex', alignItems: 'baseline', gap: 5, flexWrap: 'wrap',
+            },
+          },
+            h('span', null, fmt(sel.createdAt)),
+            h('span', { style: { opacity: 0.55 } }, '→'),
+            h('span', null, fmt(sel.lastAt))),
+          /* Lineage arrow rows: merged-chain narration without labels — native parent (in/out of
+           * view) + manual in-edges (orange, inline disconnect) in the ← row; successors in the →
+           * row. Branch marking follows the merged out-degree (parent successors ≥ 2). Root stays
+           * silent. */
           (() => {
-            const parts: unknown[] = []
-            let nativeNote: string | null = null
-            let nativeMissing = false
+            const inItems: unknown[] = []
             if (sel.parent !== null) {
               if (byId.has(sel.parent)) {
-                nativeNote = t('lineage.from', { title: titleOf(sel.parent) }) +
-                  ((degree.get(sel.parent)?.out ?? 0) >= 2 ? t('edge.kind.branch') : '')
+                inItems.push(h('span', { key: 'nat', style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                  h('span', { style: { color: DIM } }, '←'),
+                  h('span', null, titleOf(sel.parent)),
+                  (degree.get(sel.parent)?.out ?? 0) >= 2 ? h('span', { style: { color: BRANCH } }, '⑂') : null))
               } else {
-                nativeNote = t('lineage.fromMissing', { id: shortId(sel.parent) })
-                nativeMissing = true
+                inItems.push(h('span', { key: 'natmiss', style: { display: 'inline-flex', alignItems: 'center', gap: 4, color: DIM } },
+                  h('span', null, '←'),
+                  h('span', null, t('lineage.fromMissing', { id: shortId(sel.parent) }))))
               }
             }
-            if (nativeNote !== null) parts.push(h('span', { key: 'nat' }, nativeNote))
             for (const l of selManualIn) {
-              parts.push(h('span', { key: 'mi-' + l.from + l.to, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
-                h('span', null, t('lineage.from', { title: titleOf(l.from) }) + t('edge.kind.manual')),
+              inItems.push(h('span', { key: 'mi-' + l.from + l.to, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                h('span', { style: { color: DIM } }, '←'),
+                h('span', { style: { color: MANUAL } }, titleOf(l.from)),
                 h(P.Button, {
                   variant: 'ghost', size: 'sm', disabled: busy, title: t('link.disconnectTitle'),
                   onClick: () => { void act('unlink', l.from, l.to) },
                 }, t('link.disconnect'))))
             }
-            /* No predecessor at all = root session; a native parent merely out of view (no manual in-edge) stays dimmed gray. */
-            const dim = parts.length === 0 || (nativeMissing && selManualIn.length === 0)
-            return h('div', { style: { fontSize: 12, color: dim ? DIM : undefined, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
-              h('span', null, t('lineage.prefix')),
-              parts.length > 0
-                ? parts.flatMap((p, i) => (i < parts.length - 1 ? [p, h('span', { key: 'sep-' + String(i) }, t('fmt.listSep'))] : [p]))
-                : h('span', null, t('lineage.root')))
+            /* Fork provenance notes: inferred lineage / missing source — dim marks in the ← row. */
+            if (sel.parentSource === 'inferred') {
+              inItems.push(h('span', { key: 'forkinf', style: { color: DIM } }, t('detail.forkInferred')))
+            }
+            if (sel.forkMarkerSeq !== null && sel.parent === null) {
+              inItems.push(h('span', { key: 'forkmiss', style: { color: DIM } }, t('detail.forkSourceMissing')))
+            }
+            const outItems = selOut.map((o, i) => h('span', { key: 'out-' + String(i), style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+              h('span', { style: { color: DIM } }, '→'),
+              h('span', { style: o.manual ? { color: MANUAL } : undefined }, titleOf(o.id)),
+              o.branch ? h('span', { style: { color: BRANCH } }, '⑂') : null,
+              o.unlink !== null
+                ? h(P.Button, {
+                    variant: 'ghost', size: 'sm', disabled: busy, title: t('link.disconnectTitle'),
+                    onClick: () => { void act('unlink', o.unlink.from, o.unlink.to) },
+                  }, t('link.disconnect'))
+                : null))
+            const row = (list: unknown[]): unknown =>
+              list.length > 0
+                ? h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 12px' } }, list)
+                : null
+            const inRow = row(inItems)
+            const outRow = row(outItems)
+            if (inRow === null && outRow === null) return null
+            return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } }, [inRow, outRow])
           })(),
-          /* Handoff skill invocations: turn/time/message seq each; reconciles the gold/purple frame states. */
-          sel.handoffHits.length > 0
+          /* Handoff invocations: one compact header + one mono line per call. Awaiting states
+           * stay on the canvas (purple/gold frames) — no color words repeated here. */
+          sel.handoffHits.length > 0 || sel.seeded
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                h('div', { style: { fontSize: 12 } },
-                  t('handoff.summary', { count: sel.handoffHits.length }),
-                  sel.handoffFirst && (degree.get(sel.id)?.in ?? 0) === 0
-                    ? h('span', { style: { color: FIRST_NUDGE } }, t('handoff.mark.awaitParent'))
-                    : null,
-                  sel.handoffUsed && (degree.get(sel.id)?.out ?? 0) === 0
-                    ? h('span', { style: { color: LAST_NUDGE } }, t('handoff.mark.awaitChild'))
-                    : null),
+                h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8 } },
+                  sel.handoffHits.length > 0 ? h('span', null, t('handoff.count', { count: sel.handoffHits.length })) : null,
+                  sel.seeded ? h('span', { style: { color: DIM } }, t('handoff.seeded')) : null),
                 ...sel.handoffHits.map((hit) => h('div', {
                   key: 'handoff-hit-' + String(hit.seq) + '-' + String(hit.at),
-                  style: { color: DIM, fontSize: 11.5, fontFamily: MONO },
-                }, t('handoff.hit', { turn: hit.turn, time: hit.at > 0 ? fmtFull(hit.at) : t('handoff.timeUnknown'), seq: hit.seq }))),
+                  style: { color: DIM, fontSize: 11.5, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' },
+                }, t('handoff.hit', { turn: hit.turn, time: hit.at > 0 ? fmt(hit.at) : t('handoff.timeUnknown'), seq: hit.seq }))),
               )
-            : null,
-          /* "Links to" row = merged-chain successor narration (manual out-edges disconnect inline). */
-          selOut.length > 0
-            ? h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' } },
-                h('span', null, t('lineage.outPrefix')),
-                ...selOut.flatMap((o, i) => {
-                  const frags: unknown[] = [h('span', { key: 'out-' + String(i) }, t('lineage.outItem', { title: titleOf(o.id), mark: o.mark }))]
-                  const u = o.unlink
-                  if (u !== null) {
-                    frags.push(h(P.Button, {
-                      key: 'outb-' + String(i), variant: 'ghost', size: 'sm', disabled: busy, title: t('link.disconnectTitle'),
-                      onClick: () => { void act('unlink', u.from, u.to) },
-                    }, t('link.disconnect')))
-                  }
-                  if (i < selOut.length - 1) frags.push(h('span', { key: 'outs-' + String(i) }, t('fmt.enumSep')))
-                  return frags
-                }))
             : null,
           /* Turn bars: horizontal, one bar per turn; first/last larger, handoff-call turns gold
            * (selected = blue fill + gold edge); clicking any bar shows that turn — when the last
@@ -1391,13 +1562,22 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                     },
                   })
                 })),
+            /* Bare position counter — the bar visuals already say first/last (big) and handoff (gold);
+             * the suffix words survive only in each bar's tooltip. */
             turnsData !== null && turnsData.turns > 0
-              ? h('span', { style: { color: DIM, fontSize: 11, marginLeft: 6 } },
-                  t('turns.position', { turn: selTurn, total: turnsData.turns }) +
-                  ((turnsData.handoffTurns ?? []).some((x) => x.turn === selTurn) ? t('turns.suffixHandoff') : '') +
-                  (selTurn === 1 ? t('turns.suffixFirst') : '') +
-                  (selTurn === turnsData.turns ? t('turns.suffixLast') : ''))
+              ? h('span', { style: { color: DIM, fontSize: 11, marginLeft: 6, fontVariantNumeric: 'tabular-nums' } },
+                  t('turns.position', { turn: selTurn, total: turnsData.turns }))
               : (turnsData !== null ? h('span', { style: { color: DIM, fontSize: 11 } }, t('turns.none')) : null),
+            /* Jump to the selected turn in the conversation — every session (outline seq for the
+             * current one, /turns seq otherwise; openSession switches first), disabled while paging. */
+            turnsData !== null && turnsData.turns > 0
+              ? h(P.Button, {
+                  variant: 'ghost', size: 'sm',
+                  disabled: jumping || locateSeqFor(selTurn) === undefined,
+                  title: t('turns.jumpTitle'),
+                  onClick: (): void => jumpToTurn(selTurn),
+                }, t('turns.jump'))
+              : null,
           ),
           h('div', {
             title: t('turns.contentHint'),
@@ -1417,17 +1597,26 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
                   const userText = tv.user === ''
                     ? h('span', { style: { color: DIM } }, t('turns.noUserText'))
                     : tv.user + (tv.userClipped === true ? t('turns.truncated') : '')
-                  const assistantText = tv.assistant === ''
-                    ? h('span', { style: { color: DIM } }, t('turns.noAssistantReply'))
-                    : (tv.assistantReasoning === true ? t('turns.reasoningPrefix') : '') + tv.assistant +
-                      (tv.assistantClipped === true ? t('turns.truncated') : '')
+                  /* Assistant copy renders through the conversation's own Markdown renderer (GFM +
+                   * TeX, code fences, safe links) so the panel reads like the chat; the user prompt
+                   * stays plain text, as in the chat. Reasoning fallbacks keep a dim marker line. */
                   return [
-                    h('div', { key: 'u', style: { marginBottom: 6 } },
-                      h('span', { style: { color: ACCENT, fontWeight: 600 } }, t('turns.roleUser')),
+                    /* Voices distinguished by gutter, not labels: dim bar = user, bright bar =
+                     * assistant; the role name stays available as a hover tooltip. */
+                    h('div', { key: 'u', title: t('turns.roleUser'),
+                        style: { marginBottom: 6, borderLeft: '2px solid rgba(128,128,128,0.55)', paddingLeft: 8 } },
                       userText),
-                    h('div', { key: 'a' },
-                      h('span', { style: { color: BRANCH, fontWeight: 600 } }, t('turns.roleAssistant')),
-                      assistantText),
+                    h('div', { key: 'a', title: t('turns.roleAssistant'),
+                        style: { borderLeft: '2px solid ' + AXIS, paddingLeft: 8 } },
+                      tv.assistantReasoning === true
+                        ? h('div', { style: { color: DIM, fontSize: 11, marginBottom: 2 } }, t('turns.reasoningPrefix'))
+                        : null,
+                      tv.assistant === ''
+                        ? h('span', { style: { color: DIM } }, t('turns.noAssistantReply'))
+                        : h(P.MarkdownText, { text: tv.assistant, streaming: false, labels: mdLabels }),
+                      tv.assistantClipped === true
+                        ? h('span', { style: { color: DIM } }, t('turns.truncated'))
+                        : null),
                   ]
                 })(),
           ),
@@ -1495,7 +1684,7 @@ export function apply(ctx: Ctx): void {
     } catch { /* silent when the service is missing (only this panel is affected) */ }
   }
   const Panel = (props: { sessionId?: string; t?: Translate }): unknown =>
-    h(PanelBoundary, null, h(PanelBody, { sessionId: props.sessionId, openSession, t: props.t ?? T }))
+    h(PanelBoundary, null, h(PanelBody, { sessionId: props.sessionId, openSession, ctx, t: props.t ?? T }))
 
   // Part 1: tab type (guide entry card; clicking it = openTab('session-timeline'))
   ctx.effect(() => ctx.sidebarRightTabs.register({
