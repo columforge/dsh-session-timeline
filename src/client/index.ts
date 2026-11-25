@@ -110,6 +110,8 @@ function markdownLabelsOf(t: Translate): MarkdownLabelsView {
 
 const API_BASE = '/session-timeline/api'
 const POLL_MS = 8000
+/** While the host is still building its index (partial snapshot) the table polls this fast. */
+const BUILD_POLL_MS = 1000
 const FETCH_TIMEOUT_MS = 15000
 const TAB_ID = '@columforge/session-timeline'
 const TAB_KIND = 'session-timeline'
@@ -308,6 +310,10 @@ type Snapshot = {
   sessions?: SNode[]
   edges?: NEdge[]
   manualLinks?: MLink[]
+  /** The host answered before its index was current (some sessions still show their skeleton or their
+   *  previous state); present only until the next settled response. */
+  partial?: boolean
+  build?: { done: number; total: number }
 }
 
 type Ctx = {
@@ -386,33 +392,49 @@ function fetchWorkspaces(): Promise<Workspace[] | null> {
     .finally(() => clearTimeout(tid))
 }
 
-/** Polls the host API; pauses while the page is hidden. workspace first, else locate by the current session. */
+/** Polls the host API; pauses while the page is hidden. workspace first, else locate by the current session.
+ *  One request at a time: the next poll is armed once the previous one settled. A table whose index is not
+ *  built yet is answered at once with `partial: true`; those snapshots poll fast until the host is current. */
 function useSnapshot(t: Translate, workspace: string | undefined, sessionId: string | undefined): [Snapshot | undefined, () => void] {
   const [snap, setSnap] = useState<Snapshot | undefined>(undefined)
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const fetchOnce = (): void => {
-    if (workspace === undefined && sessionId === undefined) { setSnap({ ok: false, code: 'noSession' }); return }
-    const ctrl = new AbortController()
-    const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-    fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((data: Snapshot) => setSnap(data))
-      .catch(() => { /* keep the last snapshot on poll failure */ })
-      .finally(() => clearTimeout(tid))
-  }
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollRef = useRef<() => void>(() => {})
 
   useEffect(() => {
-    fetchOnce()
-    timer.current = setInterval(() => { if (!document.hidden) fetchOnce() }, POLL_MS)
-    const onVis = (): void => { if (!document.hidden) fetchOnce() }
+    let alive = true
+    const request = async (): Promise<Snapshot | null> => {
+      if (workspace === undefined && sessionId === undefined) return { ok: false, code: 'noSession' }
+      const ctrl = new AbortController()
+      const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+      try {
+        const r = await fetch(listUrl(workspace, sessionId), { signal: ctrl.signal })
+        return (await r.json()) as Snapshot
+      } catch {
+        return null // keep the last snapshot on poll failure
+      } finally {
+        clearTimeout(tid)
+      }
+    }
+    const poll = async (): Promise<void> => {
+      const data = await request()
+      if (!alive) return
+      if (data !== null) setSnap(data)
+      if (document.hidden) return // paused; visibilitychange resumes
+      if (timer.current !== null) clearTimeout(timer.current)
+      const delay = data?.partial === true ? BUILD_POLL_MS : POLL_MS
+      timer.current = setTimeout(() => { timer.current = null; void poll() }, delay)
+    }
+    pollRef.current = () => { void poll() }
+    const onVis = (): void => { if (!document.hidden) void poll() }
     document.addEventListener('visibilitychange', onVis)
+    void poll()
     return () => {
-      if (timer.current !== null) clearInterval(timer.current)
+      alive = false
+      if (timer.current !== null) clearTimeout(timer.current)
       document.removeEventListener('visibilitychange', onVis)
     }
   }, [t, workspace, sessionId])
-  return [snap, fetchOnce]
+  return [snap, () => pollRef.current()]
 }
 
 function shortId(id: string): string {
@@ -1342,6 +1364,9 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       ) : null,
       (snap.unreadable ?? 0) > 0
         ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, t('stats.unreadable', { count: snap.unreadable ?? 0 }))
+        : null,
+      snap.partial === true
+        ? h('span', { style: { color: DIM, fontSize: 11.5 } }, t('stats.building', { done: snap.build?.done ?? 0, total: snap.build?.total ?? 0 }))
         : null,
       msg !== null ? h('span', { style: { color: MANUAL, fontSize: 11.5 } }, msg) : null,
       h('span', { style: { marginLeft: 'auto' } },

@@ -16,6 +16,20 @@
  * bucket only, earliest header.createdAt tie-break) — parentSource marks
  * header vs inferred lineage.
  * Manual drag links are stored per workspace at ~/.dsh/session-timeline/<bucket>.json.
+ *
+ * Loading strategy (the table is an index, the logs are the truth):
+ * - Each top-level session has a record (./record) kept at
+ *   <storage>/index/<bucket>.json (+ event signatures in <bucket>.sig.json),
+ *   validated against its log file by size + mtime on every request.
+ * - Unchanged file → the record as is (no read, no decompress).
+ * - Grown file (logs are append-only zstd frames) → the appended frames are
+ *   decoded and merged into the record on the request path.
+ * - New or otherwise changed file → rebuilt from the whole log on a worker
+ *   thread (./worker, ./pool). While that runs the table answers at once
+ *   with the previous record or a skeleton (first frame header + last frame
+ *   activity) and `partial: true`; the client polls fast until it settles.
+ * - Child (subagent) sessions are never parsed in full: /workspaces reads
+ *   their header from the first frame alone.
  * API (/session-timeline/api):
  *   GET  /workspaces?session=…        workspace list (buckets)
  *   GET  /list?session=…&workspace=…  nodes (+archived flag) + native edges + manual links
@@ -32,91 +46,50 @@
  * Archive state: the workspace registry's global archive set
  * (ctx 'workspaceRegistry' service when present, else the durable
  * ~/.dsh/storages/workspace.json global.archivedSessionIds) is stamped onto
- * each /list node at response time — never into the parse cache, because
+ * each /list node at response time — never into the index, because
  * archiving changes nothing in the session log file.
  */
 import type { Context } from 'cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import type { Dirent } from 'node:fs'
+import { open, readFile, readdir, stat } from 'node:fs/promises'
+import { availableParallelism, homedir } from 'node:os'
 import { join } from 'node:path'
-import { zstdDecompressSync } from 'node:zlib'
+import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
-import { parseLog, signatureLog } from './parse.js'
-import type { HandoffHit, EventSignature } from './parse.js'
+import { scanChunk, signatureLog, type EventSignature } from './parse.js'
 import { extractTurns } from './turns.js'
 import type { TurnScan } from './turns.js'
 import { inferForkParents } from './lineage-infer.js'
+import { ZSTD_MAGIC, completeEnd, decodeLog, firstFrameText, lastFrameText } from './logfile.js'
+import {
+  appendSig, buildRec, extendRec, failedRec, headCwd, headerLine, isOk, recNode, sigCovers,
+  skeletonNode, skeletonOf, unpackSig,
+  type Rec, type RecOk, type SigColumns, type Skeleton,
+} from './record.js'
+import { classify, parseIndex, parseSigs, serializeIndex, serializeSigs } from './index-store.js'
+import { buildJob, type BuildJob, type BuildResult } from './build.js'
+import { createPool, type BuildPool } from './pool.js'
+import type { ManualLink, NativeEdge, SessionNode, WorkspaceInfo } from './types.js'
+
+export type { ManualLink, NativeEdge, SessionNode, WorkspaceInfo } from './types.js'
 
 export const name = '@columforge/session-timeline'
 export const inject = ['webServer']
 
 export interface Config {
-  /** Manual-link storage root; empty = <DSH_HOME>/session-timeline */
+  /** Manual-link storage root; empty = <DSH_HOME>/session-timeline (the session index lives in its index/ subfolder) */
   storage_dir: string
+  /** Worker threads for whole-log index builds: -1 = auto (cores − 1, capped at 4);
+   *  0 = build on the request path (blocks the host like earlier versions); N = thread count. */
+  workers: number
 }
 
 export const Config = z.object({
   storage_dir: z.string().default(''),
+  workers: z.number().default(-1),
 })
-
-/** Timeline node (top-level session). */
-export interface SessionNode {
-  id: string
-  title: string | null
-  /** Creation time = first real user message time; falls back to header.createdAt when none. */
-  createdAt: number
-  /** Raw header.createdAt (session object written time; display reconciliation). */
-  logCreatedAt: number
-  /** Raw header.parentSession (may point outside the bucket or to a deleted session). */
-  parent: string | null
-  /** Where the effective parent link came from: raw header.parentSession,
-   *  or inferred from the fork's inherited-prefix signature (native forks
-   *  stopped writing parentSession in DSH v0.2.2-alpha.2). */
-  parentSource: 'header' | 'inferred' | null
-  /** Own fork marker seq (= inherited prefix length; null = not a native fork). */
-  forkMarkerSeq: number | null
-  /** header.isSeeded: opened from a handoff context seed. */
-  seeded: boolean
-  cwd: string | null
-  /** Owning workspace (session bucket). */
-  bucket: string
-  /** Last activity (last log event time); used for positioning/display. */
-  lastAt: number
-  /** Handoff skill ran in the first conversation window. */
-  handoffFirst: boolean
-  /** Any handoff skill invocation appeared (gold "no successor" criterion; not last-window only). */
-  handoffUsed: boolean
-  /** Handoff skill invocations (seq/time/turn, in log order). */
-  handoffHits: HandoffHit[]
-  /** In the workspace registry's archive set (stamped at /list assembly; not part of the parse cache). */
-  archived: boolean
-}
-
-/** Native edge kind: the child's lineage nature — 'branch' when the child is
- *  a fork (own inherited end-seed marker) or the parent has multiple children;
- *  'handoff' only for a chained single non-fork child. */
-export interface NativeEdge {
-  from: string
-  to: string
-  kind: 'handoff' | 'branch'
-}
-
-/** Manual link (from = earlier-created side; semantics: "to" links from "from"). */
-export interface ManualLink {
-  from: string
-  to: string
-  created_at: string
-}
-
-/** Workspace (session bucket) summary. */
-export interface WorkspaceInfo {
-  bucket: string
-  cwd: string | null
-  sessions: number
-  /** Newest session file mtime in the bucket (epoch ms). */
-  newest: number
-}
 
 interface Doc {
   version: 1
@@ -124,103 +97,20 @@ interface Doc {
 }
 
 const SESSION_FILE = 'session.v4.jsonl.zstd'
-const ZSTD_MAGIC = 0xFD2FB528
 /** Sentinel bucket name for the global timeline (/list?workspace=__global__ aggregates all;
  *  /link and /unlink resolve each endpoint back to its own bucket). */
 export const GLOBAL_BUCKET = '__global__'
-
-/* ---- zstd frame scan (same semantics as harness session-persistence-jsonl; tolerates torn trailing frames) ---- */
-
-interface FrameRange { start: number; end: number }
-
-/** Frame header parse result: where the block area starts + whether the frame
- *  carries a 4-byte checksum after its last block. */
-interface FrameHeader { end: number; checksum: boolean }
-
-/** Decoded frame descriptor (zstd RFC §3.1.1): the variable header field byte
- *  counts and the checksum flag. Pure bit decoding, no bounds checks. */
-function decodeFrameDescriptor(descriptor: number): { windowDescriptorByte: number; dictionaryBytes: number; contentSizeBytes: number; checksum: boolean } {
-  const contentSizeFlag = descriptor >>> 6
-  const singleSegment = (descriptor & 0x20) !== 0
-  const checksum = (descriptor & 0x04) !== 0
-  const dictionaryFlag = descriptor & 0x03
-  const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag
-  const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag
-  return { windowDescriptorByte: singleSegment ? 0 : 1, dictionaryBytes, contentSizeBytes, checksum }
-}
-
-/** Parse the frame header at `offset` (magic, frame descriptor, optional
- *  window/dictionary/content-size fields). Null = invalid or header-truncated
- *  (reserved bits set, not enough bytes) — the caller stops at this frame. */
-function readFrameHeader(buffer: Buffer, offset: number): FrameHeader | null {
-  if (buffer.length - offset < 4 || buffer.readUInt32LE(offset) !== ZSTD_MAGIC) return null
-  offset += 4
-  if (offset >= buffer.length) return null
-  const descriptor = buffer.readUInt8(offset)
-  offset += 1
-  if ((descriptor & 0x18) !== 0) return null
-  const fields = decodeFrameDescriptor(descriptor)
-  const remainingHeaderBytes = fields.windowDescriptorByte + fields.dictionaryBytes + fields.contentSizeBytes
-  if (buffer.length - offset < remainingHeaderBytes) return null
-  return { end: offset + remainingHeaderBytes, checksum: fields.checksum }
-}
-
-/** Walk 3-byte block headers from `offset` to the frame's last block.
- *  `torn` = the frame is cut short or carries a reserved block type —
- *  the caller stops at this frame (offset is then meaningless). */
-function walkBlocks(buffer: Buffer, offset: number): { end: number; torn: boolean } {
-  for (;;) {
-    if (buffer.length - offset < 3) return { end: offset, torn: true }
-    const blockHeader = buffer.readUIntLE(offset, 3)
-    offset += 3
-    const lastBlock = (blockHeader & 1) !== 0
-    const blockType = (blockHeader >>> 1) & 0x03
-    const blockSize = blockHeader >>> 3
-    if (blockType === 0x03) return { end: offset, torn: true }
-    const payloadBytes = blockType === 0x01 ? 1 : blockSize
-    if (buffer.length - offset < payloadBytes) return { end: offset, torn: true }
-    offset += payloadBytes
-    if (lastBlock) return { end: offset, torn: false }
-  }
-}
-
-/** Tolerant frame scan: frame ranges of every complete frame; stops at the
- *  first invalid/header-truncated frame or torn block walk (same boundary
- *  as before the split — one big loop read header, blocks, checksum). */
-function scanZstdFrames(buffer: Buffer): FrameRange[] {
-  const frames: FrameRange[] = []
-  let offset = 0
-  while (offset < buffer.length) {
-    const start = offset
-    const header = readFrameHeader(buffer, offset)
-    if (header === null) break
-    const blocks = walkBlocks(buffer, header.end)
-    if (blocks.torn) break
-    offset = blocks.end
-    if (header.checksum) {
-      if (buffer.length - offset < 4) break
-      offset += 4
-    }
-    frames.push({ start, end: offset })
-  }
-  return frames
-}
-
-function decompressLog(buffer: Buffer): string | null {
-  const frames = scanZstdFrames(buffer)
-  if (frames.length === 0) return null
-  try {
-    const parts: Buffer[] = []
-    for (const f of frames) parts.push(zstdDecompressSync(buffer.subarray(f.start, f.end)))
-    return Buffer.concat(parts).toString('utf8')
-  } catch {
-    return null
-  }
-}
-
-/* ---- Session bucket scan (mtime+size cache) ---- */
-
-interface CacheEntry { mtimeMs: number; size: number; node: SessionNode | null; cwd: string | null }
+/** Upper bound for the auto worker count (builds are CPU-bound; the host keeps a core). */
+const WORKER_CAP = 4
+/** Appended bytes merged on the request path: per file, and per table request. */
+const MERGE_FILE_BYTES = 256 * 1024
+const MERGE_REQUEST_BYTES = 1024 * 1024
+/** Skeleton reads: first/last-frame windows (grown ×4 up to the whole file). */
+const EDGE_WINDOW_BYTES = 64 * 1024
+/** Index writes: debounce after a change, then at most once per gap under continuous appends. */
+const PERSIST_DELAY_MS = 500
+const RECS_WRITE_GAP_MS = 5000
+const SIGS_WRITE_GAP_MS = 30000
 
 function dshHomeDir(): string {
   return process.env.DSH_HOME || join(homedir(), '.dsh')
@@ -261,12 +151,46 @@ function saveDoc(root: string, bucket: string, doc: Doc): ApiFail | null {
   }
 }
 
+/** A session log file and its current size + mtime (the index validation key). */
+interface FileStat { sid: string; file: string; size: number; mtimeMs: number }
+
+/** One bucket's table for a request: nodes, unreadable count and build progress. */
+interface TableView { nodes: SessionNode[]; unreadable: number; pending: number; building: number; done: number }
+
+/** Per-bucket index state (in memory authoritative; mirrored to disk). */
+interface BucketState {
+  recs: Map<string, Rec>
+  sigs: Map<string, SigColumns>
+  /** Whole-log signatures of records truncated below a fork cut (session file state keyed). */
+  full: Map<string, { size: number; mtimeMs: number; sig: EventSignature }>
+  recsLoaded: Promise<void> | null
+  sigsLoaded: Promise<void> | null
+  recsDirty: boolean
+  sigsDirty: boolean
+  timer: NodeJS.Timeout | null
+  lastRecsWrite: number
+  lastSigsWrite: number
+  /** Builds in flight (one per session; shared by concurrent requests). */
+  building: Map<string, Promise<void>>
+  /** Skeletons by session, valid for one file state; never persisted. */
+  skeletons: Map<string, { size: number; mtimeMs: number; sk: Skeleton | null }>
+  /** Builds of the current build wave (progress for partial responses); null once settled. */
+  wave: { total: number; done: number } | null
+}
+
 export function apply(ctx: Context, config: Config): void {
   const root = config.storage_dir.trim() !== ''
     ? config.storage_dir
     : join(dshHomeDir(), 'session-timeline')
   const sessionsRoot = join(dshHomeDir(), 'sessions')
+  const indexDir = join(root, 'index')
   mkdirSync(root, { recursive: true })
+
+  /* ---- Build workers: whole-log builds off the event loop (0 = on the request path) ---- */
+
+  const wanted = config.workers ?? -1
+  const threads = wanted > 0 ? wanted : wanted === 0 ? 0 : Math.max(1, Math.min(WORKER_CAP, availableParallelism() - 1))
+  const pool: BuildPool | null = threads === 0 ? null : createPool(threads, fileURLToPath(new URL('./worker.js', import.meta.url)))
 
   /* ---- Workspace archive set (service first, durable file fallback) ---- */
 
@@ -292,7 +216,7 @@ export function apply(ctx: Context, config: Config): void {
     return new Set()
   }
 
-  /** Stamp the response-only archived flag (parse cache stays flag-free). */
+  /** Stamp the response-only archived flag (the index stays flag-free). */
   const stampArchived = (nodes: SessionNode[]): SessionNode[] => {
     const ids = archivedIds()
     return nodes.map((n) => ({ ...n, archived: ids.has(n.id) }))
@@ -315,91 +239,349 @@ export function apply(ctx: Context, config: Config): void {
     return null
   }
 
-  /** One session file → node/dir info (mtime+size cache). */
-  const parseCache = new Map<string, CacheEntry>()
-  const parseSessionDir = (bucket: string, sid: string): CacheEntry => {
-    const file = join(sessionsRoot, bucket, sid, SESSION_FILE)
-    let st
-    try { st = statSync(file) } catch { return { mtimeMs: 0, size: 0, node: null, cwd: null } }
-    const cached = parseCache.get(sid)
-    if (cached !== undefined && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached
-    let entry: CacheEntry = { mtimeMs: st.mtimeMs, size: st.size, node: null, cwd: null }
-    try {
-      const text = decompressLog(readFileSync(file))
-      const parsed = text === null ? null : parseLog(text)
-      if (parsed !== null) {
-        entry = {
-          mtimeMs: st.mtimeMs,
-          size: st.size,
-          cwd: parsed.cwd,
-          node: sid.startsWith('session-')
-            ? {
-                id: sid,
-                title: parsed.title,
-                createdAt: parsed.firstUserAt > 0 ? parsed.firstUserAt : parsed.createdAt,
-                logCreatedAt: parsed.createdAt,
-                lastAt: parsed.lastAt,
-                parent: parsed.parent,
-                parentSource: parsed.parent !== null ? 'header' : null,
-                forkMarkerSeq: parsed.forkMarkerSeq,
-                seeded: parsed.seeded,
-                cwd: parsed.cwd,
-                bucket,
-                handoffFirst: parsed.handoffFirst,
-                handoffUsed: parsed.handoffUsed,
-                handoffHits: parsed.handoffHits,
-                // Response-time flag: the parse cache always carries false;
-                // stampArchived overwrites it at /list assembly.
-                archived: false,
-              }
-            : null,
-        }
+  /* ---- Session index (records + signatures per bucket; the logs stay the truth) ---- */
+
+  const buckets = new Map<string, BucketState>()
+
+  const stateOf = (bucket: string): BucketState => {
+    let st = buckets.get(bucket)
+    if (st === undefined) {
+      st = {
+        recs: new Map(), sigs: new Map(), full: new Map(), recsLoaded: null, sigsLoaded: null,
+        recsDirty: false, sigsDirty: false, timer: null, lastRecsWrite: 0, lastSigsWrite: 0,
+        building: new Map(), skeletons: new Map(), wave: null,
       }
-    } catch { /* one corrupt session file must not break the whole table */ }
-    parseCache.set(sid, entry)
-    return entry
-  }
-
-  /** Event-signature cache for fork-lineage inference (mtime+size keyed like
-   *  the parse cache; FIFO-capped — only fork-bearing buckets ever fill it). */
-  interface SigEntry { mtimeMs: number; size: number; sig: EventSignature | null }
-  const sigCache = new Map<string, SigEntry>()
-  const SIG_CACHE_CAP = 512
-  const sessionSignature = (bucket: string, sid: string): EventSignature | null => {
-    const file = join(sessionsRoot, bucket, sid, SESSION_FILE)
-    let st
-    try { st = statSync(file) } catch { return null }
-    const cached = sigCache.get(sid)
-    if (cached !== undefined && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.sig
-    let sig: EventSignature | null = null
-    try {
-      const text = decompressLog(readFileSync(file))
-      sig = text === null ? null : signatureLog(text)
-    } catch { sig = null }
-    if (sigCache.size >= SIG_CACHE_CAP) {
-      const oldest = sigCache.keys().next()
-      if (!oldest.done) sigCache.delete(oldest.value)
+      buckets.set(bucket, st)
     }
-    sigCache.set(sid, { mtimeMs: st.mtimeMs, size: st.size, sig })
-    return sig
+    return st
   }
 
-  /** Turn-dialog scan cache for /turns (mtime+size keyed like the parse
-   *  cache; FIFO-capped — full-dialog scans are far heavier than signature
-   *  scans, and decode failures cache too so a corrupt log decompresses once
-   *  per file state, not once per request). */
-  interface TurnsEntry { mtimeMs: number; size: number; scan: TurnScan | null }
-  const turnsCache = new Map<string, TurnsEntry>()
-  const TURNS_CACHE_CAP = 64
+  /** Text of an index file ('' = absent or unreadable: the logs rebuild it). */
+  const readIndexFile = async (name: string): Promise<string> => {
+    try {
+      return await readFile(join(indexDir, name), 'utf8')
+    } catch {
+      return ''
+    }
+  }
+
+  /** Load a bucket's records once per host run (shared by concurrent requests). */
+  const loadRecs = (st: BucketState, bucket: string): Promise<void> => {
+    st.recsLoaded ??= readIndexFile(bucket + '.json').then((text) => {
+      const recs = text === '' ? null : parseIndex(text, bucket)
+      st.recs = recs ?? new Map<string, Rec>()
+      // A foreign/corrupt/older-version file is replaced on the first change.
+      if (recs === null && text !== '') st.recsDirty = true
+    })
+    return st.recsLoaded
+  }
+
+  /** Load a bucket's signatures on demand (only fork-bearing buckets need them). */
+  const loadSigs = (st: BucketState, bucket: string): Promise<void> => {
+    st.sigsLoaded ??= readIndexFile(bucket + '.sig.json').then((text) => {
+      const sigs = text === '' ? null : parseSigs(text, bucket)
+      if (sigs !== null) st.sigs = sigs
+    })
+    return st.sigsLoaded
+  }
+
+  /** Replace an index file atomically (tmp + rename: a crash leaves the old file). */
+  const writeFileAtomic = (name: string, text: string): void => {
+    const file = join(indexDir, name)
+    writeFileSync(file + '.tmp', text, 'utf8')
+    renameSync(file + '.tmp', file)
+  }
+
+  /** Write what is due (synchronous: the maps must not change under the serializer). */
+  const flushIndex = (st: BucketState, bucket: string, force = false): void => {
+    const now = Date.now()
+    const recs = st.recsDirty && (force || now - st.lastRecsWrite >= RECS_WRITE_GAP_MS)
+    const sigs = st.sigsDirty && (force || now - st.lastSigsWrite >= SIGS_WRITE_GAP_MS)
+    if (!recs && !sigs) return
+    try {
+      mkdirSync(indexDir, { recursive: true })
+      if (recs) {
+        writeFileAtomic(bucket + '.json', serializeIndex(bucket, st.recs))
+        st.lastRecsWrite = now
+        st.recsDirty = false
+      }
+      if (sigs) {
+        writeFileAtomic(bucket + '.sig.json', serializeSigs(bucket, st.sigs))
+        st.lastSigsWrite = now
+        st.sigsDirty = false
+      }
+    } catch { /* the index is a cache: retried on the next change or at dispose */ }
+  }
+
+  /** Debounce after the last change, honoring the write gaps. */
+  const persistDelay = (st: BucketState): number => {
+    const now = Date.now()
+    const waitRecs = st.recsDirty ? RECS_WRITE_GAP_MS - (now - st.lastRecsWrite) : 0
+    const waitSigs = st.sigsDirty ? SIGS_WRITE_GAP_MS - (now - st.lastSigsWrite) : 0
+    return Math.max(PERSIST_DELAY_MS, waitRecs, waitSigs)
+  }
+
+  const schedulePersist = (st: BucketState, bucket: string): void => {
+    if (st.timer !== null) return
+    st.timer = setTimeout(() => {
+      st.timer = null
+      flushIndex(st, bucket)
+      if (st.recsDirty || st.sigsDirty) schedulePersist(st, bucket)
+    }, persistDelay(st))
+    st.timer.unref?.()
+  }
+
+  /** Mark a bucket's index changed (signatures too) and schedule its write. */
+  const touch = (st: BucketState, bucket: string, sigsToo = false): void => {
+    st.recsDirty = true
+    if (sigsToo) st.sigsDirty = true
+    schedulePersist(st, bucket)
+  }
+
+  /* ---- File reads (all async: nothing below blocks the event loop but decoding) ---- */
+
+  /** Bytes [from, to) of a file; null = unreadable or shorter than expected. */
+  const readSlice = async (file: string, from: number, to: number): Promise<Buffer | null> => {
+    try {
+      const handle = await open(file, 'r')
+      try {
+        const buf = Buffer.allocUnsafe(to - from)
+        const { bytesRead } = await handle.read(buf, 0, to - from, from)
+        return bytesRead === to - from ? buf : null
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /** Text of the first complete frame of a file (the header frame). */
+  const readHead = async (file: string, size: number): Promise<string | null> => {
+    for (let window = EDGE_WINDOW_BYTES; ; window *= 4) {
+      const buf = await readSlice(file, 0, Math.min(size, window))
+      if (buf === null) return null
+      const text = firstFrameText(buf)
+      if (text !== null || buf.length >= size) return text
+    }
+  }
+
+  /** Text of the last complete frame of a file (a flush in progress is skipped). */
+  const readTail = async (file: string, size: number): Promise<string | null> => {
+    for (let window = EDGE_WINDOW_BYTES; ; window *= 4) {
+      const from = Math.max(0, size - window)
+      const buf = await readSlice(file, from, size)
+      if (buf === null) return null
+      const text = lastFrameText(buf)
+      if (text !== null || from === 0) return text
+    }
+  }
+
+  /** Top-level session files of a bucket with their current size + mtime. */
+  const statTopLevel = async (bucket: string): Promise<FileStat[]> => {
+    let ents: Dirent[]
+    try {
+      ents = await readdir(join(sessionsRoot, bucket), { withFileTypes: true })
+    } catch {
+      return []
+    }
+    const stats = await Promise.all(ents.map(async (ent): Promise<FileStat | null> => {
+      if (!ent.isDirectory() || !ent.name.startsWith('session-')) return null
+      const file = join(sessionsRoot, bucket, ent.name, SESSION_FILE)
+      try {
+        const st = await stat(file)
+        return { sid: ent.name, file, size: st.size, mtimeMs: st.mtimeMs }
+      } catch {
+        return null
+      }
+    }))
+    return stats.filter((f): f is FileStat => f !== null)
+  }
+
+  /* ---- Keep records current: prune, merge appended frames, rebuild ---- */
+
+  /** Drop what belongs to sessions that left the bucket. */
+  const prune = (st: BucketState, bucket: string, sids: ReadonlySet<string>): void => {
+    let changed = false
+    for (const sid of st.recs.keys()) {
+      if (sids.has(sid)) continue
+      st.recs.delete(sid)
+      st.sigs.delete(sid)
+      st.full.delete(sid)
+      st.skeletons.delete(sid)
+      changed = true
+    }
+    if (changed) touch(st, bucket, true)
+  }
+
+  /** Merge the bytes appended to an indexed log on the request path (complete
+   *  frames only, at most MERGE_FILE_BYTES). A torn frame alone changes
+   *  nothing: the record keeps its size and the next poll merges the rest.
+   *  Null = anything unusual → the log is rebuilt. */
+  const mergeGrown = async (st: BucketState, bucket: string, rec: RecOk, f: FileStat, sig: SigColumns | undefined): Promise<RecOk | null> => {
+    const head = await readSlice(f.file, 0, Math.min(f.size, EDGE_WINDOW_BYTES))
+    const tail = f.size - rec.size <= MERGE_FILE_BYTES ? await readSlice(f.file, rec.size, f.size) : null
+    if (head === null || tail === null) return null
+    const first = firstFrameText(head)
+    if (first === null || headerLine(first) !== rec.head) return null
+    if (tail.length < 4 || tail.readUInt32LE(0) !== ZSTD_MAGIC) return null
+    const text = decodeLog(tail)
+    if (text === null) return completeEnd(tail) === 0 ? rec : null
+    const c = scanChunk(text)
+    if (c === null) return null
+    const next = extendRec(rec, c, rec.size + completeEnd(tail), f.mtimeMs)
+    st.recs.set(f.sid, next)
+    st.sigs.set(f.sid, appendSig(sig, c.sig))
+    touch(st, bucket, true)
+    return next
+  }
+
+  const applyResult = (st: BucketState, bucket: string, r: BuildResult): void => {
+    st.recs.set(r.sid, r.rec)
+    st.skeletons.delete(r.sid)
+    if (r.sig === undefined) st.sigs.delete(r.sid)
+    else st.sigs.set(r.sid, r.sig)
+    st.full.delete(r.sid)
+    touch(st, bucket, true)
+  }
+
+  /** Build a log's record: on a worker when possible (a dead pool falls back
+   *  to the request path), inline when workers are off. Shared by concurrent
+   *  requests of the same session; never rejects. */
+  const startBuild = (st: BucketState, bucket: string, f: FileStat): Promise<void> => {
+    const running = st.building.get(f.sid)
+    if (running !== undefined) return running
+    const job: BuildJob = { sid: f.sid, file: f.file, size: f.size, mtimeMs: f.mtimeMs }
+    const run = pool === null ? buildJob(job) : pool.build(job).catch(() => buildJob(job))
+    const wave = (st.wave ??= { total: 0, done: 0 })
+    wave.total += 1
+    const tracked = (async () => {
+      try {
+        applyResult(st, bucket, await run)
+      } catch { /* not stored: the next request classifies the file and rebuilds */ }
+      wave.done += 1
+      st.building.delete(f.sid)
+    })()
+    st.building.set(f.sid, tracked)
+    return tracked
+  }
+
+  /** Skeleton of a log still being built (cached per file state; never stored). */
+  const skeletonFor = async (st: BucketState, f: FileStat): Promise<Skeleton | null> => {
+    const hit = st.skeletons.get(f.sid)
+    if (hit !== undefined && hit.size === f.size && hit.mtimeMs === f.mtimeMs) return hit.sk
+    const head = await readHead(f.file, f.size)
+    const tail = head === null ? null : await readTail(f.file, f.size)
+    const sk = head === null || tail === null ? null : skeletonOf(head, tail)
+    st.skeletons.set(f.sid, { size: f.size, mtimeMs: f.mtimeMs, sk })
+    return sk
+  }
+
+  /** Node of an indexed session; a failed record counts as an unreadable log. */
+  const addSettled = (st: BucketState, bucket: string, sid: string, view: TableView): void => {
+    const rec = st.recs.get(sid)
+    if (isOk(rec)) view.nodes.push(recNode(rec, sid, bucket))
+    else view.unreadable += 1
+  }
+
+  /** The bucket's table. Unchanged records are reused as is, appended frames
+   *  are merged; the rest is built — awaited when `wait` (or workers are off),
+   *  else started in the background and reported through pending/building. */
+  const tableView = async (bucket: string, wait: boolean): Promise<TableView> => {
+    const st = stateOf(bucket)
+    await loadRecs(st, bucket)
+    const files = await statTopLevel(bucket)
+    prune(st, bucket, new Set(files.map((f) => f.sid)))
+    const view: TableView = { nodes: [], unreadable: 0, pending: 0, building: 0, done: 0 }
+    const stale: FileStat[] = []
+    let budget = MERGE_REQUEST_BYTES
+    for (const f of files) {
+      const rec = st.recs.get(f.sid)
+      const cls = classify(rec, f.size, f.mtimeMs)
+      if (cls === 'same') {
+        addSettled(st, bucket, f.sid, view)
+        continue
+      }
+      // Appended frames within the request budget merge here; the rest is rebuilt.
+      if (cls !== 'grow' || rec === undefined || rec.fail === true || f.size - rec.size > budget) {
+        stale.push(f)
+        continue
+      }
+      const merged = await mergeGrown(st, bucket, rec, f, st.sigs.get(f.sid))
+      if (merged === null) {
+        stale.push(f)
+        continue
+      }
+      budget -= merged.size - rec.size
+      view.nodes.push(recNode(merged, f.sid, bucket))
+    }
+    if (wait) {
+      await Promise.all(stale.map((f) => startBuild(st, bucket, f)))
+      for (const f of stale) addSettled(st, bucket, f.sid, view)
+      st.wave = null
+    } else if (stale.length > 0) {
+      // Still being built when the response leaves: answer with the previous
+      // record (slightly old beats absent) or a skeleton, and say so.
+      await Promise.all(stale.map(async (f) => {
+        void startBuild(st, bucket, f)
+        view.pending += 1
+        const rec = st.recs.get(f.sid)
+        if (isOk(rec)) {
+          view.nodes.push(recNode(rec, f.sid, bucket))
+          return
+        }
+        const sk = await skeletonFor(st, f)
+        if (sk !== null) view.nodes.push(skeletonNode(sk, f.sid, bucket))
+      }))
+      view.building = st.wave?.total ?? stale.length
+      view.done = st.wave?.done ?? 0
+    } else {
+      st.wave = null
+    }
+    view.nodes.sort((a, b2) => a.lastAt - b2.lastAt)
+    return view
+  }
+
+  /* ---- Fork-lineage inference over the index ---- */
+
+  /** Whole-log signature of a session whose stored columns are shorter than a
+   *  fork cut (records truncated at SIG_CAP); kept per file state. */
+  const decodeFullSig = async (st: BucketState, bucket: string, sid: string): Promise<void> => {
+    const rec = st.recs.get(sid)
+    if (!isOk(rec)) return
+    const hit = st.full.get(sid)
+    if (hit !== undefined && hit.size === rec.size && hit.mtimeMs === rec.mtimeMs) return
+    try {
+      const text = decodeLog(await readFile(join(sessionsRoot, bucket, sid, SESSION_FILE)))
+      if (text === null) return
+      st.full.set(sid, { size: rec.size, mtimeMs: rec.mtimeMs, sig: signatureLog(text) })
+    } catch { /* unreadable: inference skips this candidate */ }
+  }
 
   /** Native forks stopped writing header.parentSession (DSH v0.2.2-alpha.2),
    *  so header lineage alone misses every new fork. For children with an own
    *  fork marker whose header parent is absent/out-of-bucket, recover the
    *  source via the inherited-prefix signature match (pure logic in
-   *  ./lineage-infer; same bucket only — lineage never crosses workspaces). */
-  const resolveForkParents = (bucket: string, nodes: SessionNode[]): void => {
+   *  ./lineage-infer; same bucket only — lineage never crosses workspaces).
+   *  Signatures come from the index; sessions still being built sit out. */
+  const resolveForkParents = async (bucket: string, nodes: SessionNode[]): Promise<void> => {
     if (!nodes.some((n) => n.forkMarkerSeq !== null)) return
-    const inferred = inferForkParents(nodes, (id) => sessionSignature(bucket, id))
+    const st = stateOf(bucket)
+    await loadSigs(st, bucket)
+    const cut = Math.max(...nodes.map((n) => n.forkMarkerSeq ?? 0))
+    const indexed = nodes.filter((n) => isOk(st.recs.get(n.id)))
+    const lacking = indexed.filter((n) => !sigCovers(st.sigs.get(n.id), cut))
+    await Promise.all(lacking.map((n) => decodeFullSig(st, bucket, n.id)))
+    /** Whole-log signature of an indexed session: the stored columns when they
+     *  cover the cut, else the decoded signature of the same file state. */
+    const signatureOf = (id: string): EventSignature | null => {
+      const sig = st.sigs.get(id)
+      if (sigCovers(sig, cut)) return unpackSig(sig)
+      const rec = st.recs.get(id)
+      const full = st.full.get(id)
+      return full !== undefined && isOk(rec) && full.size === rec.size && full.mtimeMs === rec.mtimeMs ? full.sig : null
+    }
+    const inferred = inferForkParents(nodes, signatureOf)
     for (const n of nodes) {
       const hit = inferred.get(n.id)
       if (hit !== undefined) {
@@ -407,25 +589,6 @@ export function apply(ctx: Context, config: Config): void {
         n.parentSource = 'inferred'
       }
     }
-  }
-
-  /** Bucket node scan (top-level session nodes only). */
-  const listBucketNodes = (bucket: string): { nodes: SessionNode[]; unreadable: number } => {
-    const nodes: SessionNode[] = []
-    let unreadable = 0
-    let ents
-    try { ents = readdirSync(join(sessionsRoot, bucket), { withFileTypes: true }) } catch { return { nodes, unreadable } }
-    for (const ent of ents) {
-      if (!ent.isDirectory()) continue
-      const e = parseSessionDir(bucket, ent.name)
-      /* Shallow copy: the inference below mutates parent links, and the parse
-       * cache entry must stay pristine. */
-      if (e.node !== null) nodes.push({ ...e.node })
-      else if (ent.name.startsWith('session-') && e.mtimeMs !== 0) unreadable += 1
-    }
-    resolveForkParents(bucket, nodes)
-    nodes.sort((a, b) => a.lastAt - b.lastAt)
-    return { nodes, unreadable }
   }
 
   /** Native edges: a fork child (own inherited end-seed marker) is a branch
@@ -447,37 +610,55 @@ export function apply(ctx: Context, config: Config): void {
     return out
   }
 
-  /** Workspace list: bucket + cwd (one cached session header per bucket) + top-level session count (= node count) + newest mtime. */
-  const listWorkspaces = (): WorkspaceInfo[] => {
+  /* ---- Workspace list ---- */
+
+  /** cwd of the first session in readdir order whose header carries one: the
+   *  indexed header for records, else the first frame alone (child sessions
+   *  are never parsed in full; failed logs are skipped). */
+  const bucketCwd = async (bucket: string, files: ReadonlyArray<{ sid: string; size: number }>): Promise<string | null> => {
+    const st = stateOf(bucket)
+    await loadRecs(st, bucket)
+    for (const f of files) {
+      const rec = st.recs.get(f.sid)
+      if (rec !== undefined) {
+        if (isOk(rec) && rec.cwd !== null) return rec.cwd
+        continue
+      }
+      const head = await readHead(join(sessionsRoot, bucket, f.sid, SESSION_FILE), f.size)
+      const cwd = head === null ? null : headCwd(head)
+      if (cwd !== null) return cwd
+    }
+    return null
+  }
+
+  /** Workspace list: bucket + cwd + top-level session count (= node count) + newest mtime. */
+  const listWorkspaces = async (): Promise<WorkspaceInfo[]> => {
     const out: WorkspaceInfo[] = []
-    let buckets
-    try { buckets = readdirSync(sessionsRoot, { withFileTypes: true }) } catch { return out }
-    for (const b of buckets) {
+    let bucketDirs: Dirent[]
+    try { bucketDirs = readdirSync(sessionsRoot, { withFileTypes: true }) } catch { return out }
+    for (const b of bucketDirs) {
       if (!b.isDirectory()) continue
-      let count = 0
-      let newest = 0
-      let sids: string[] = []
+      let sids: string[]
       try {
         sids = readdirSync(join(sessionsRoot, b.name), { withFileTypes: true })
           .filter((e) => e.isDirectory())
           .map((e) => e.name)
       } catch { continue }
-      for (const sid of sids) {
+      const stats = await Promise.all(sids.map(async (sid): Promise<{ sid: string; size: number; mtimeMs: number } | null> => {
         try {
-          const st = statSync(join(sessionsRoot, b.name, sid, SESSION_FILE))
-          /* Count = timeline node criterion (top-level session-* only;
-           * subagent child sessions are excluded), aligned with /list sessions.length */
-          if (sid.startsWith('session-')) count += 1
-          if (st.mtimeMs > newest) newest = st.mtimeMs
-        } catch { /* directories without a session file don't count */ }
-      }
+          const st = await stat(join(sessionsRoot, b.name, sid, SESSION_FILE))
+          return { sid, size: st.size, mtimeMs: st.mtimeMs }
+        } catch {
+          return null // directories without a session file don't count
+        }
+      }))
+      const present = stats.filter((f): f is NonNullable<typeof f> => f !== null)
+      /* Count = timeline node criterion (top-level session-* only;
+       * subagent child sessions are excluded), aligned with /list sessions.length */
+      const count = present.filter((f) => f.sid.startsWith('session-')).length
       if (count === 0) continue
-      let cwd: string | null = null
-      for (const sid of sids) {
-        const e = parseSessionDir(b.name, sid)
-        if (e.cwd !== null) { cwd = e.cwd; break }
-      }
-      out.push({ bucket: b.name, cwd, sessions: count, newest })
+      const newest = present.reduce((max, f) => Math.max(max, f.mtimeMs), 0)
+      out.push({ bucket: b.name, cwd: await bucketCwd(b.name, present), sessions: count, newest })
     }
     out.sort((a, b2) => b2.newest - a.newest)
     return out
@@ -527,29 +708,42 @@ export function apply(ctx: Context, config: Config): void {
     return { bucket, fail: null }
   }
 
+  /** Build progress fields, only while builds are still running (settled
+   *  responses stay exactly what earlier versions returned). */
+  const progress = (view: TableView): Record<string, unknown> =>
+    view.pending > 0 ? { partial: true, build: { done: view.done, total: view.building } } : {}
+
   /** Global aggregation: all buckets' nodes + per-bucket lineage edges + manual links (lineage never crosses buckets). */
-  const listGlobalNodes = (): { nodes: SessionNode[]; edges: NativeEdge[]; links: ManualLink[]; unreadable: number } => {
-    const nodes: SessionNode[] = []
-    const edges: NativeEdge[] = []
-    const links: ManualLink[] = []
-    let unreadable = 0
-    let buckets: string[] = []
+  const listGlobalNodes = async (wait: boolean): Promise<TableView & { edges: NativeEdge[]; links: ManualLink[] }> => {
+    const out: TableView & { edges: NativeEdge[]; links: ManualLink[] } = { nodes: [], edges: [], links: [], unreadable: 0, pending: 0, building: 0, done: 0 }
+    let bucketNames: string[] = []
     try {
-      buckets = readdirSync(sessionsRoot, { withFileTypes: true })
+      bucketNames = readdirSync(sessionsRoot, { withFileTypes: true })
         .filter((e) => e.isDirectory())
         .map((e) => e.name)
     } catch { /* unreadable root returns empty */ }
-    for (const b of buckets) {
-      const r = listBucketNodes(b)
-      nodes.push(...r.nodes)
-      unreadable += r.unreadable
-      edges.push(...nativeEdges(r.nodes))
-      const doc = loadDoc(root, b)
-      if (doc.fail === null) links.push(...doc.doc.links)
+    const views = await Promise.all(bucketNames.map(async (bucket) => ({ bucket, view: await tableView(bucket, wait) })))
+    for (const { bucket, view } of views) {
+      await resolveForkParents(bucket, view.nodes)
+      out.nodes.push(...view.nodes)
+      out.unreadable += view.unreadable
+      out.pending += view.pending
+      out.building += view.building
+      out.done += view.done
+      out.edges.push(...nativeEdges(view.nodes))
+      const doc = loadDoc(root, bucket)
+      if (doc.fail === null) out.links.push(...doc.doc.links)
     }
-    nodes.sort((a, b2) => a.lastAt - b2.lastAt)
-    return { nodes, edges, links, unreadable }
+    out.nodes.sort((a, b2) => a.lastAt - b2.lastAt)
+    return out
   }
+
+  /** Turn-dialog scan cache for /turns (size + mtime keyed; FIFO-capped — full-dialog
+   *  scans are far heavier than index maintenance, and decode failures cache too so a
+   *  corrupt log decompresses once per file state). */
+  interface TurnsEntry { mtimeMs: number; size: number; scan: TurnScan | null }
+  const turnsCache = new Map<string, TurnsEntry>()
+  const TURNS_CACHE_CAP = 64
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
@@ -559,7 +753,7 @@ export function apply(ctx: Context, config: Config): void {
       const query = new URL('http://x/' + (req.url ?? '')).searchParams
 
       if (pathname === '/session-timeline/api/workspaces' && req.method === 'GET') {
-        json(res, 200, { ok: true, workspaces: listWorkspaces() })
+        json(res, 200, { ok: true, workspaces: await listWorkspaces() })
         return
       }
 
@@ -567,7 +761,7 @@ export function apply(ctx: Context, config: Config): void {
         const located = locate(query.get('workspace'), query.get('session'))
         if (located.fail !== null) { json(res, 400, failPayload(located.fail)); return }
         if (located.bucket === GLOBAL_BUCKET) {
-          const g = listGlobalNodes()
+          const g = await listGlobalNodes(threads === 0)
           json(res, 200, {
             ok: true,
             bucket: GLOBAL_BUCKET,
@@ -575,19 +769,22 @@ export function apply(ctx: Context, config: Config): void {
             sessions: stampArchived(g.nodes),
             edges: g.edges,
             manualLinks: g.links,
+            ...progress(g),
           })
           return
         }
-        const { nodes, unreadable } = listBucketNodes(located.bucket)
+        const view = await tableView(located.bucket, threads === 0)
+        await resolveForkParents(located.bucket, view.nodes)
         const doc = loadDoc(root, located.bucket)
         if (doc.fail !== null) { json(res, 500, failPayload(doc.fail)); return }
         json(res, 200, {
           ok: true,
           bucket: located.bucket,
-          unreadable,
-          sessions: stampArchived(nodes),
-          edges: nativeEdges(nodes),
+          unreadable: view.unreadable,
+          sessions: stampArchived(view.nodes),
+          edges: nativeEdges(view.nodes),
           manualLinks: doc.doc.links,
+          ...progress(view),
         })
         return
       }
@@ -621,7 +818,8 @@ export function apply(ctx: Context, config: Config): void {
           }
           bucket = fromBucket
         }
-        const { nodes } = listBucketNodes(bucket)
+        const { nodes } = await tableView(bucket, true)
+        await resolveForkParents(bucket, nodes)
         const byId = new Map(nodes.map((n) => [n.id, n]))
         const a = byId.get(from)
         const b = byId.get(to)
@@ -704,8 +902,8 @@ export function apply(ctx: Context, config: Config): void {
         try {
           /* mtime+size cache: the detail view re-requests turns on every node
            * select and every bar click; each miss used to decompress the whole
-           * log. Same staleness contract as parseCache (mtime+size, content
-           * changes at equal size+mtime are invisible by design). */
+           * log. Same staleness contract as the session index (size + mtime;
+           * content changes at equal size+mtime are invisible by design). */
           const file = join(dir, SESSION_FILE)
           const st = statSync(file)
           const cached = turnsCache.get(dir)
@@ -713,7 +911,7 @@ export function apply(ctx: Context, config: Config): void {
           if (cached !== undefined && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
             scan = cached.scan
           } else {
-            const text = decompressLog(readFileSync(file))
+            const text = decodeLog(await readFile(file))
             scan = text === null ? null : extractTurns(text)
             if (turnsCache.size >= TURNS_CACHE_CAP) {
               const oldest = turnsCache.keys().next()
@@ -750,5 +948,15 @@ export function apply(ctx: Context, config: Config): void {
     },
   } satisfies WebRoute), 'session-timeline: api')
 
-  ctx.logger?.info?.('[' + name + '] 会话时间线就绪：手工衔接存储 ' + root)
+  /* Index files are only a cache, but rebuilding them costs a full pass over
+   * the logs: write what is due when the plugin unloads (reload, shutdown). */
+  ctx.effect(() => () => {
+    for (const [bucket, st] of buckets) {
+      if (st.timer !== null) clearTimeout(st.timer)
+      flushIndex(st, bucket, true)
+    }
+    pool?.dispose()
+  }, 'session-timeline: index store')
+
+  ctx.logger?.info?.('[' + name + '] 会话时间线就绪：手工衔接存储 ' + root + '；索引构建线程 ' + threads)
 }

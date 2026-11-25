@@ -45,7 +45,7 @@ function boot(home) {
     webServer: { register: (route) => routes.push(route) },
     logger: { info() {} },
   }
-  apply(ctx, { storage_dir: join(home, 'tl-storage') })
+  apply(ctx, { storage_dir: join(home, 'tl-storage'), workers: 0 })
   assert.equal(routes.length, 1)
   return routes[0].handler
 }

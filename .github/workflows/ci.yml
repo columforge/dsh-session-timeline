@@ -39,7 +39,7 @@ jobs:
         run: npx --yes c8 --reporter=lcov --reports-dir target/coverage/typescript node --test test/*.test.mjs
 
       - name: CRAP gate (targeted, threshold 10)
-        run: crapper --use-existing-coverage src/parse.ts src/lineage-infer.ts src/geometry --threshold 10
+        run: crapper --use-existing-coverage src/parse.ts src/lineage-infer.ts src/logfile.ts src/record.ts src/index-store.ts src/geometry src/turns.ts --threshold 10
 
       # dryer 命中重复时仍 exit 0（非零仅表示用法错误），与 scripts/gate.sh
       # 一致按输出里的 DUPLICATE score= 行判定。

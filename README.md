@@ -130,9 +130,10 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 
 ## 数据与隐私
 
-- **只读**扫描 `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`（header、标题、首条用户消息时间、末事件时间、handoff 调用明细、fork 血缘推断的逐事件 `(type,seq,time)` 签名；zstd 多帧解码 + mtime/size 缓存，签名缓存仅在有 fork 子代的桶内填充）
+- **只读**扫描 `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd`（header、标题、首条用户消息时间、末事件时间、handoff 调用明细、fork 血缘推断的逐事件 `(type,seq,time)` 签名）：没有索引的文件在 worker 线程里整日志构建一次，之后每次请求只 `stat` 比对；文件变长就只解码新增的 zstd 帧并与旧记录合并，不再整读。子会话（非 `session-*`）不参与 `/list`
+- **派生索引**：`~/.dsh/session-timeline/index/<bucket>.json`（会话记录）与 `<bucket>.sig.json`（签名）——纯缓存，删掉即自动重建
 - 归档状态同样**只读**：读工作区注册表归档集（服务镜像，兜底 `~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds`）
-- **唯一写入**：手工衔接落 `~/.dsh/session-timeline/<bucket>.json`（按工作区隔离）
+- 手工衔接落 `~/.dsh/session-timeline/<bucket>.json`（按工作区隔离）；派生索引见上
 - 不上传任何数据，不改动会话存储
 
 ## API（webserver 前缀路由 `/session-timeline/api`）
@@ -140,7 +141,7 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 | 端点 | 说明 |
 |---|---|
 | `GET /workspaces` | 工作区清单 `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
-| `GET /list?workspace=<桶\|__global__>&session=<id>` | 节点（含 `archived` 标记）+ 原生边 + 手工衔接清单 |
+| `GET /list?workspace=<桶\|__global__>&session=<id>` | 节点（含 `archived` 标记）+ 原生边 + 手工衔接清单；索引还在构建时先返回骨架（标题为空）并附带 `partial: true, build: { done, total }`，稳定后的响应不再带这两个字段 |
 | `GET /turns?session=<id>&workspace=<桶>&turn=N` | 轮次明细（`&turn=N` 单轮按需取） |
 | `POST /link` `{workspace?, session?, from, to}` | 建立手工衔接（按创建时间归一定向，幂等）；`workspace=__global__` 时按端点解析回各自工作区，跨工作区对报 `crossWorkspace` |
 | `POST /unlink` `{workspace?, session?, from, to}` | 删除手工衔接（双向匹配）；`workspace=__global__` 时按端点解析回所属工作区 |
@@ -154,8 +155,12 @@ npm run build    # tsc host + tsdown client（借 DSH checkout 工具链）
 npm test         # pretest 自动 build，再跑全部单测
 ```
 
-- `src/index.ts`：host——会话桶扫描 + API 路由
+- `src/index.ts`：host——会话表组装（stat 比对 / 增量合并 / worker 构建调度）+ API 路由
 - `src/parse.ts`：纯函数会话日志解析（无插件依赖）
+- `src/logfile.ts`：纯函数 zstd 帧扫描与解码（首帧 / 末帧 / 完整前缀）
+- `src/record.ts`：纯函数索引记录（整日志构建、增量合并、签名列压缩）
+- `src/index-store.ts`：纯函数索引文件的读写与校验
+- `src/build.ts` / `src/worker.ts` / `src/pool.ts`：worker 线程里的整日志构建与线程池
 - `src/geometry/layout.ts`：纯函数布局（版面常量与坐标计算）
 - `src/geometry/lineage.ts`：纯函数血缘链合并语义
 - `src/geometry/routing.ts`：纯函数正交避障路由
@@ -163,6 +168,8 @@ npm test         # pretest 自动 build，再跑全部单测
 - `test/*.test.mjs`：单测（node:test，导入 `lib/` 构建产物）
 
 构建依赖 DSH 源码 checkout 的 tsc/tsdown：`export DSH_CHECKOUT=<dsh 源码目录>`（build.sh 会自动探测 `~/dsh-harness` 等常见路径）。
+
+加载策略：索引按工作区落在 `<storage_dir>/index/<bucket>.json`（默认 `~/.dsh/session-timeline/index/`）。每次请求只 `stat` 会话文件并按 `(size, mtimeMs)` 比对——未变直接用记录；变长则只读首尾两段、解码新增帧并与旧记录合并；无记录的文件、同长度改写、超过 256 KB/文件或 1 MB/次的增量交给 worker 线程整日志重建，期间先返回骨架 + `partial: true`。配置项 `workers`：`-1`（默认）自动取 `min(4, CPU−1)` 个线程，`0` 关闭线程（请求内同步构建，同旧行为），`N` 指定线程数；线程起不来时自动回退同步构建。改解析语义时递增 `src/index-store.ts` 的 `INDEX_VERSION`（旧索引整份作废重建）。
 
 改 A*/布局几何时先读 `src/geometry/*.ts` 顶部「三个历史坑」注释；验证 = `npm test` 全绿后再浏览器 DOM 采样（SVG path 的 V/H 是单坐标指令，按 x,y 成对解析会误报）。
 

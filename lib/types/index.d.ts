@@ -16,6 +16,20 @@
  * bucket only, earliest header.createdAt tie-break) — parentSource marks
  * header vs inferred lineage.
  * Manual drag links are stored per workspace at ~/.dsh/session-timeline/<bucket>.json.
+ *
+ * Loading strategy (the table is an index, the logs are the truth):
+ * - Each top-level session has a record (./record) kept at
+ *   <storage>/index/<bucket>.json (+ event signatures in <bucket>.sig.json),
+ *   validated against its log file by size + mtime on every request.
+ * - Unchanged file → the record as is (no read, no decompress).
+ * - Grown file (logs are append-only zstd frames) → the appended frames are
+ *   decoded and merged into the record on the request path.
+ * - New or otherwise changed file → rebuilt from the whole log on a worker
+ *   thread (./worker, ./pool). While that runs the table answers at once
+ *   with the previous record or a skeleton (first frame header + last frame
+ *   activity) and `partial: true`; the client polls fast until it settles.
+ * - Child (subagent) sessions are never parsed in full: /workspaces reads
+ *   their header from the first frame alone.
  * API (/session-timeline/api):
  *   GET  /workspaces?session=…        workspace list (buckets)
  *   GET  /list?session=…&workspace=…  nodes (+archived flag) + native edges + manual links
@@ -32,77 +46,28 @@
  * Archive state: the workspace registry's global archive set
  * (ctx 'workspaceRegistry' service when present, else the durable
  * ~/.dsh/storages/workspace.json global.archivedSessionIds) is stamped onto
- * each /list node at response time — never into the parse cache, because
+ * each /list node at response time — never into the index, because
  * archiving changes nothing in the session log file.
  */
 import type { Context } from 'cordis';
 import z from 'schemastery';
-import type { HandoffHit } from './parse.js';
+export type { ManualLink, NativeEdge, SessionNode, WorkspaceInfo } from './types.js';
 export declare const name = "@columforge/session-timeline";
 export declare const inject: string[];
 export interface Config {
-    /** Manual-link storage root; empty = <DSH_HOME>/session-timeline */
+    /** Manual-link storage root; empty = <DSH_HOME>/session-timeline (the session index lives in its index/ subfolder) */
     storage_dir: string;
+    /** Worker threads for whole-log index builds: -1 = auto (cores − 1, capped at 4);
+     *  0 = build on the request path (blocks the host like earlier versions); N = thread count. */
+    workers: number;
 }
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     storage_dir: z<string, string, "defined">;
+    workers: z<number, number, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     storage_dir: z<string, string, "defined">;
+    workers: z<number, number, "defined">;
 }>>, "plain">;
-/** Timeline node (top-level session). */
-export interface SessionNode {
-    id: string;
-    title: string | null;
-    /** Creation time = first real user message time; falls back to header.createdAt when none. */
-    createdAt: number;
-    /** Raw header.createdAt (session object written time; display reconciliation). */
-    logCreatedAt: number;
-    /** Raw header.parentSession (may point outside the bucket or to a deleted session). */
-    parent: string | null;
-    /** Where the effective parent link came from: raw header.parentSession,
-     *  or inferred from the fork's inherited-prefix signature (native forks
-     *  stopped writing parentSession in DSH v0.2.2-alpha.2). */
-    parentSource: 'header' | 'inferred' | null;
-    /** Own fork marker seq (= inherited prefix length; null = not a native fork). */
-    forkMarkerSeq: number | null;
-    /** header.isSeeded: opened from a handoff context seed. */
-    seeded: boolean;
-    cwd: string | null;
-    /** Owning workspace (session bucket). */
-    bucket: string;
-    /** Last activity (last log event time); used for positioning/display. */
-    lastAt: number;
-    /** Handoff skill ran in the first conversation window. */
-    handoffFirst: boolean;
-    /** Any handoff skill invocation appeared (gold "no successor" criterion; not last-window only). */
-    handoffUsed: boolean;
-    /** Handoff skill invocations (seq/time/turn, in log order). */
-    handoffHits: HandoffHit[];
-    /** In the workspace registry's archive set (stamped at /list assembly; not part of the parse cache). */
-    archived: boolean;
-}
-/** Native edge kind: the child's lineage nature — 'branch' when the child is
- *  a fork (own inherited end-seed marker) or the parent has multiple children;
- *  'handoff' only for a chained single non-fork child. */
-export interface NativeEdge {
-    from: string;
-    to: string;
-    kind: 'handoff' | 'branch';
-}
-/** Manual link (from = earlier-created side; semantics: "to" links from "from"). */
-export interface ManualLink {
-    from: string;
-    to: string;
-    created_at: string;
-}
-/** Workspace (session bucket) summary. */
-export interface WorkspaceInfo {
-    bucket: string;
-    cwd: string | null;
-    sessions: number;
-    /** Newest session file mtime in the bucket (epoch ms). */
-    newest: number;
-}
 /** Sentinel bucket name for the global timeline (/list?workspace=__global__ aggregates all;
  *  /link and /unlink resolve each endpoint back to its own bucket). */
 export declare const GLOBAL_BUCKET = "__global__";

@@ -40,7 +40,26 @@ export interface ParsedLog {
      * last one in log order. */
     forkMarkerSeq: number | null;
 }
+/** Session header fields the timeline reads (first log line). */
+export interface HeaderFields {
+    createdAt: number;
+    parent: string | null;
+    seeded: boolean;
+    cwd: string | null;
+}
+/** First line = session header; validates type/id, parses the six fields the timeline reads. */
+export declare function parseHeader(text: string): HeaderFields | null;
+/** Event times of the last `budget` lines, oldest → newest (0 = the line
+ *  carries no usable time; a trailing newline adds no empty line). Kept as
+ *  data so the last-activity scan of an appended chunk can continue it. */
+export declare function tailTimes(text: string, budget?: number): number[];
+export declare function lastActivity(text: string, fallback: number): number;
 export declare function parseLog(text: string): ParsedLog | null;
+/** parseLog plus `users` = real user messages of the own conversation (the
+ *  turn base an appended chunk continues from). */
+export declare function parseLogFull(text: string): (ParsedLog & {
+    users: number;
+}) | null;
 /** One log event's lineage tuple: (type, seq, time). A fork child's first
  * `forkMarkerSeq` tuples equal the source session's own prefix verbatim —
  * the only durable physical link native forks leave after v0.2.2-alpha.2
@@ -50,3 +69,27 @@ export type EventSignature = Array<[string, number, number]>;
  * Header line (no seq) and torn/corrupt lines are skipped; lines the fast
  * regex cannot read fall back to JSON.parse for robustness. */
 export declare function signatureLog(text: string): EventSignature;
+/** Handoff invocation inside a chunk; its turn = base + before (the base = real
+ *  user messages of the parsed prefix). */
+export interface ChunkHit {
+    seq: number;
+    at: number;
+    before: number;
+}
+/** What an appended chunk contributes on its own. */
+export interface ChunkScan {
+    title: string | null;
+    /** Time of the chunk's first real user message (0 = none). */
+    firstUserAt: number;
+    /** Real user messages inside the chunk (added to the turn base). */
+    users: number;
+    hits: ChunkHit[];
+    /** Event times of the chunk's last lines (see tailTimes). */
+    tail: number[];
+    /** Event signature of the chunk's lines (appended to the prefix signature). */
+    sig: EventSignature;
+}
+/** Scan a chunk that starts on a line boundary after text ending with '\n'.
+ *  Null = the chunk carries an own fork marker: that marker gates which user
+ *  messages and handoff calls count, so the whole log must be re-parsed. */
+export declare function scanChunk(chunk: string): ChunkScan | null;

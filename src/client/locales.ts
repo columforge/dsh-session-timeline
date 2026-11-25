@@ -88,6 +88,7 @@ export const zh = {
   'header.laneOnlyCurrent': '只看当前工作区',
   'header.refresh': '刷新',
   'stats.unreadable': '{count} 个日志不可读',
+  'stats.building': '索引构建中 {done}/{total}',
 
   /* 缩放 / 画布 */
   'zoom.out': '缩小（10%）',
@@ -206,6 +207,7 @@ export const en = {
   'header.laneOnlyCurrent': 'Only current workspace',
   'header.refresh': 'Refresh',
   'stats.unreadable': '{count} unreadable logs',
+  'stats.building': 'Building index {done}/{total}',
 
   'zoom.out': 'Zoom out (10%)',
   'zoom.in': 'Zoom in (10%)',
@@ -318,6 +320,7 @@ export const ja = {
   'header.laneOnlyCurrent': '現在のワークスペースのみ',
   'header.refresh': '更新',
   'stats.unreadable': '{count} 件のログが読取不可',
+  'stats.building': '索引を構築中 {done}/{total}',
 
   'zoom.out': '縮小（10%）',
   'zoom.in': '拡大（10%）',
@@ -430,6 +433,7 @@ export const es = {
   'header.laneOnlyCurrent': 'Solo el espacio de trabajo actual',
   'header.refresh': 'Actualizar',
   'stats.unreadable': '{count} registros ilegibles',
+  'stats.building': 'Construyendo índice {done}/{total}',
 
   'zoom.out': 'Reducir (10%)',
   'zoom.in': 'Ampliar (10%)',
@@ -542,6 +546,7 @@ export const fr = {
   'header.laneOnlyCurrent': 'Seulement l’espace de travail courant',
   'header.refresh': 'Actualiser',
   'stats.unreadable': '{count} journaux illisibles',
+  'stats.building': 'Construction de l’index {done}/{total}',
 
   'zoom.out': 'Réduire (10 %)',
   'zoom.in': 'Agrandir (10 %)',
@@ -654,6 +659,7 @@ export const de = {
   'header.laneOnlyCurrent': 'Nur aktueller Arbeitsbereich',
   'header.refresh': 'Aktualisieren',
   'stats.unreadable': '{count} Protokolle nicht lesbar',
+  'stats.building': 'Index wird erstellt {done}/{total}',
 
   'zoom.out': 'Verkleinern (10 %)',
   'zoom.in': 'Vergrößern (10 %)',
@@ -767,6 +773,7 @@ export const ru = {
   'header.laneOnlyCurrent': 'Только текущее пространство',
   'header.refresh': 'Обновить',
   'stats.unreadable': '{count} журналов не читаются',
+  'stats.building': 'Построение индекса {done}/{total}',
 
   'zoom.out': 'Уменьшить (10 %)',
   'zoom.in': 'Увеличить (10 %)',
@@ -879,6 +886,7 @@ export const pt = {
   'header.laneOnlyCurrent': 'Somente o espaço de trabalho atual',
   'header.refresh': 'Atualizar',
   'stats.unreadable': '{count} registros ilegíveis',
+  'stats.building': 'Construindo índice {done}/{total}',
 
   'zoom.out': 'Reduzir (10%)',
   'zoom.in': 'Ampliar (10%)',

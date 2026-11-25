@@ -125,9 +125,10 @@ Installation constraints: `package.json` declares `engines.dsh = ">=0.1.3-alpha.
 
 ## Data and privacy
 
-- **Read-only** scan of `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd` (header, title, first-user-message time, last-event time, handoff invocation details; zstd multi-frame decode with mtime/size caching, per-event `(type,seq,time)` signatures for fork lineage inference; zstd multi-frame decode + mtime/size caching, signature cache filled only for buckets holding fork children)
+- **Read-only** scan of `~/.dsh/sessions/<bucket>/<sessionId>/session.v4.jsonl.zstd` (header, title, first-user-message time, last-event time, handoff invocation details, per-event `(type,seq,time)` signatures for fork lineage inference): a file without an index record is built once from the whole log on a worker thread; afterwards every request only `stat`s the files, and a file that grew has just its appended zstd frames decoded and merged into the stored record. Child sessions (not `session-*`) do not take part in `/list`
+- **Derived index**: `~/.dsh/session-timeline/index/<bucket>.json` (session records) and `<bucket>.sig.json` (signatures) — a pure cache, rebuilt automatically when deleted
 - Archive state is **read-only** too: the workspace registry's archive set (service mirror, falling back to `~/.dsh/storages/workspace.json` `global.archivedSessionIds`)
-- **The only write**: manual links go to `~/.dsh/session-timeline/<bucket>.json` (isolated per workspace)
+- Manual links go to `~/.dsh/session-timeline/<bucket>.json` (isolated per workspace); the derived index is described above
 - Nothing is uploaded; session storage is never modified
 
 ## API (webserver prefix `/session-timeline/api`)
@@ -135,7 +136,7 @@ Installation constraints: `package.json` declares `engines.dsh = ">=0.1.3-alpha.
 | Endpoint | Description |
 |---|---|
 | `GET /workspaces` | Workspace list `{ ok, workspaces: [{bucket, cwd, sessions, newest}] }` |
-| `GET /list?workspace=<bucket\|__global__>&session=<id>` | Nodes (+ `archived` flag) + native edges + manual links |
+| `GET /list?workspace=<bucket\|__global__>&session=<id>` | Nodes (+ `archived` flag) + native edges + manual links; while the index is still being built it answers with skeletons (empty titles) plus `partial: true, build: { done, total }` — fields the settled response no longer carries |
 | `GET /turns?session=<id>&workspace=<bucket>&turn=N` | Turn details (`&turn=N` fetches a single turn) |
 | `POST /link` `{workspace?, session?, from, to}` | Create a manual link (direction normalized by creation time, idempotent); with `workspace=__global__` each endpoint resolves back to its own bucket — cross-workspace pairs fail with `crossWorkspace` |
 | `POST /unlink` `{workspace?, session?, from, to}` | Remove a manual link (matched both ways); with `workspace=__global__` the link's own bucket is resolved from the endpoints |
@@ -149,8 +150,12 @@ npm run build    # tsc host + tsdown client (uses the DSH checkout toolchain)
 npm test         # pretest builds, then runs all unit tests
 ```
 
-- `src/index.ts`: host — bucket scanning + API routes
+- `src/index.ts`: host — table assembly (stat comparison / incremental merge / worker build scheduling) + API routes
 - `src/parse.ts`: pure session-log parsing (no plugin dependencies)
+- `src/logfile.ts`: pure zstd frame scanning and decoding (first frame / last frame / complete prefix)
+- `src/record.ts`: pure index records (whole-log build, incremental merge, signature column packing)
+- `src/index-store.ts`: pure index-file read/write and validation
+- `src/build.ts` / `src/worker.ts` / `src/pool.ts`: whole-log builds on worker threads and the thread pool
 - `src/geometry/layout.ts`: pure layout (metrics and coordinates)
 - `src/geometry/lineage.ts`: pure merged-lineage semantics
 - `src/geometry/routing.ts`: pure orthogonal obstacle-avoiding routing
@@ -158,6 +163,8 @@ npm test         # pretest builds, then runs all unit tests
 - `test/*.test.mjs`: unit tests (node:test, importing the built `lib/`)
 
 The build borrows tsc/tsdown from a DSH source checkout: `export DSH_CHECKOUT=<dsh source dir>` (build.sh auto-probes `~/dsh-harness` and other common paths).
+
+Loading strategy: the index lives per workspace in `<storage_dir>/index/<bucket>.json` (default `~/.dsh/session-timeline/index/`). Each request only `stat`s the session files and compares `(size, mtimeMs)` — unchanged files use their record as is; a file that grew has only its head and tail read, the appended frames decoded and merged into the record; files without a record, same-length rewrites and appends beyond 256 KB per file or 1 MB per request are rebuilt from the whole log on a worker thread, with a skeleton + `partial: true` answered meanwhile. Config `workers`: `-1` (default) picks `min(4, CPUs − 1)` threads, `0` disables threads (synchronous build inside the request, the previous behavior), `N` sets the count; when a thread cannot start it falls back to the synchronous build. Bump `INDEX_VERSION` in `src/index-store.ts` whenever parsing semantics change (the old index is discarded and rebuilt).
 
 When touching the A*/layout geometry, read the "three historical pitfalls" comment atop `src/geometry/*.ts` first; verify with `npm test` before browser DOM sampling (SVG path V/H are single-coordinate commands — parsing them as x,y pairs gives false alarms).
 

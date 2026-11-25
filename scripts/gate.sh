@@ -2,7 +2,8 @@
 # ub-mode quality gates for session-timeline (targeted scope).
 #
 # Scope (why):
-#   CRAP  -> src/parse.ts, src/lineage-infer.ts, src/geometry/*  (pure logic,
+#   CRAP  -> src/parse.ts, src/lineage-infer.ts, src/geometry/*, src/turns.ts,
+#            src/logfile.ts, src/record.ts, src/index-store.ts  (pure logic,
 #            unit-tested; the plugin's business rules live here).
 #   DRY   -> src/ (whole tree; UI duplication is still worth removing).
 #   OUT   -> src/client/* and src/index.ts: host/UI boundary code with no
@@ -46,7 +47,7 @@ fi
 "${C8[@]}" --reporter=lcov --reports-dir target/coverage/typescript node --test test/*.test.mjs
 
 echo '== CRAP gate (ub-mode: every targeted function < 10) =='
-"$CRAPPER" --use-existing-coverage src/parse.ts src/lineage-infer.ts src/geometry src/turns.ts --threshold 10
+"$CRAPPER" --use-existing-coverage src/parse.ts src/lineage-infer.ts src/logfile.ts src/record.ts src/index-store.ts src/geometry src/turns.ts --threshold 10
 
 echo '== duplication gate (ub-mode: no pair scoring >= 0.82) =='
 DRY_OUT="$("$DRYER" --threshold 0.82 src)"

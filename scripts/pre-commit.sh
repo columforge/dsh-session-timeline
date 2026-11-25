@@ -13,7 +13,8 @@
 #   CRAP=CC²+CC → CC≥3 全军覆没。dryer 的 --changed 倒是遵守路径参数，但为
 #   两个工具保持同一机制，统一按 `git status --porcelain -- src` 自选文件，
 #   顺带把 CRAP 精确对齐到 gate.sh 的定向范围（parse.ts / lineage-infer.ts /
-#   src/geometry，排除无覆盖的 src/index.ts 与 src/client/*，同 docs/gates.md）。
+#   logfile.ts / record.ts / index-store.ts / src/geometry，排除无覆盖的
+#   src/index.ts 与 src/client/*，同 docs/gates.md）。
 #   空变更 = 两个工具都跳过，直接放行。
 #
 # CRAP 模式自适应（实测结论）：
@@ -81,7 +82,7 @@ while IFS= read -r line; do
   [[ "$path" == src/*.ts ]] || continue
   DRY_FILES+=("$path")
   case "$path" in
-    src/parse.ts | src/lineage-infer.ts | src/geometry/*.ts) CRAP_FILES+=("$path") ;;
+    src/parse.ts | src/lineage-infer.ts | src/logfile.ts | src/record.ts | src/index-store.ts | src/geometry/*.ts) CRAP_FILES+=("$path") ;;
   esac
 done < <(git status --porcelain -- src)
 

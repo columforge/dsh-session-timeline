@@ -62,7 +62,7 @@ function boot(home, ctxExtra = {}) {
     logger: { info() {} },
     ...ctxExtra,
   }
-  apply(ctx, { storage_dir: join(home, 'tl-storage') })
+  apply(ctx, { storage_dir: join(home, 'tl-storage'), workers: 0 })
   assert.equal(routes.length, 1)
   return routes[0].handler
 }

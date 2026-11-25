@@ -8,9 +8,9 @@ CRAP (complexity × coverage), duplication (dryer), and mutation testing (mutato
 
 | Area | Gate | Why |
 | --- | --- | --- |
-| `src/parse.ts`, `src/lineage-infer.ts`, `src/geometry/*`, `src/turns.ts` | CRAP < 10 | Pure logic; the plugin's lineage/parse/geometry/turn-attribution rules; unit-tested directly. |
+| `src/parse.ts`, `src/lineage-infer.ts`, `src/geometry/*`, `src/turns.ts`, `src/logfile.ts`, `src/record.ts`, `src/index-store.ts` | CRAP < 10 | Pure logic; the plugin's lineage/parse/geometry/turn-attribution rules and the index record model (zstd frame walk, record build/merge, index file validation); unit-tested directly. |
 | `src/**/*.ts` | duplication score < 0.82 | Whole tree; UI duplication counts too. |
-| `src/index.ts` (host routes, zstd scan, caches) | partially gated | Route tests exist (test/routes.test.mjs) and the zstd scan region is compliant (readFrameHeader 6.0 / decodeFrameDescriptor 5.0 / walkBlocks 7.0 / scanZstdFrames 6.0). Sole blocker: `apply` (CC 196) — decomposition approved (L1 pure scanners + L2 assembly shell, all ≤10); include the whole file at threshold 10 once it lands. |
+| `src/index.ts` (host routes, table assembly, caches) | partially gated | Route tests exist (test/routes.test.mjs, test/loading.test.mjs). The zstd frame scan moved to `src/logfile.ts` (gated). Sole blocker: `apply` (CC 196) — decomposition approved (L1 pure scanners + L2 assembly shell, all ≤10); include the whole file at threshold 10 once it lands. |
 | `src/client/index.ts` (panel UI, 1.5k lines) | not gated yet | No DOM/unit coverage. CRAP there is coverage arithmetic, not a design signal. Follow-up: extract pure helpers (errorText/interpolate/formatters) into a tested module, then include them. |
 | mutation testing (mutator) | periodic, single-file, **parallel OK (locally patched)** | Baseline 2026-11-06 on `src/parse.ts`: 126 sites; 85/41 killed with pins (test/parse-pins.test.mjs); the 41 survivors are triaged equivalents. Re-validated 2026-11-09: parallel (default workers) and serial produce identical per-site outcomes (126/126) in 26s vs 140s. Required because upstream mutator has two open defects: worker overlays symlinked the build output so worker builds wrote through to the real tree and raced (our local copy patches this — `lib` added to SKIP_LINK, test-runner dirs copied instead of linked; and `scripts/build.sh` makes its dependency links idempotent so worker builds never mutate the real `node_modules`), and differential `--since-last-run` snapshots inherit stale outcomes (#21) — **always delete `.metrics/mutate/<ns>.edn` for an authoritative run**, patched or not. |
 
@@ -36,6 +36,16 @@ bucket, and 900 deterministic random geometry cases (fixed seed). Run it after
 any rebuild that follows a refactor — identical output is the proof that
 behavior did not change. Skips without `ST_DIFF`; the real-log segment skips
 when no sessions root or zstd CLI exists.
+
+`ST_DIFF=1 node --test test/diff.routes.slow.test.mjs` is the route-level guard for
+the loading strategy (persistent index, incremental merge, worker threads): the
+old `lib/` — `git archive` of `ST_OLD_REV` (default `HEAD`), or the directory
+`ST_OLD_LIB` — against the working-tree `lib/`, over every workspace of the local
+session store plus `__global__`, `/workspaces` and `/list?session=`. Worker mode
+settled, inline mode (`workers: 0`) and a fresh instance over the flushed index
+must be byte-equal to the old response; rounds during which the store changed
+are discarded. Once this change is committed, `HEAD` is the new implementation:
+point `ST_OLD_REV` at the commit before it (or `ST_OLD_LIB` at an old `lib/`).
 
 ## Install the gate tools
 

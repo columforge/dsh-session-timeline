@@ -50,7 +50,8 @@ export interface ParsedLog {
 
 /* ---- Line-level decoding (boundary discipline: parse each line once) ---- */
 
-interface HeaderView {
+/** Session header fields the timeline reads (first log line). */
+export interface HeaderFields {
   createdAt: number
   parent: string | null
   seeded: boolean
@@ -93,7 +94,7 @@ function inOwnConversation(start: number, marker: ForkMarker | null): boolean {
 }
 
 /** First line = session header; validates type/id, parses the six fields the timeline reads. */
-function parseHeader(text: string): HeaderView | null {
+export function parseHeader(text: string): HeaderFields | null {
   const nl = text.indexOf('\n')
   if (nl <= 0) return null
   let header: unknown
@@ -180,19 +181,34 @@ function eventTime(raw: string): number {
   } catch { return 0 }
 }
 
-/* Last activity: scan backward from the log tail for the first parsable
- * event carrying a time (tolerates torn trailing lines). */
-function lastActivity(text: string, fallback: number): number {
+/** Event times of the last `budget` lines, oldest → newest (0 = the line
+ *  carries no usable time; a trailing newline adds no empty line). Kept as
+ *  data so the last-activity scan of an appended chunk can continue it. */
+export function tailTimes(text: string, budget = 64): number[] {
+  const times: number[] = []
   let pos = text.length
-  for (let guard = 0; guard < 64 && pos > 0; guard += 1) {
+  for (let guard = 0; guard < budget && pos > 0; guard += 1) {
     const lineEnd = pos
     const lineStart = text.lastIndexOf('\n', pos - 2) + 1
     pos = lineStart > 0 ? lineStart - 1 : 0
-    const time = eventTime(text.slice(lineStart, lineEnd).trim())
+    times.push(eventTime(text.slice(lineStart, lineEnd).trim()))
+  }
+  return times.reverse()
+}
+
+/* Last activity: scan backward from the log tail for the first parsable
+ * event carrying a time (tolerates torn trailing lines). */
+export function lastActivity(text: string, fallback: number): number {
+  const times = tailTimes(text)
+  for (let i = times.length - 1; i >= 0; i -= 1) {
+    const time = times[i]!
     if (time > 0) return time
   }
   return fallback
 }
+
+/** Handoff skill invocation before turn attribution (its line offset feeds turnAt). */
+interface RawHit { seq: number; at: number; pos: number }
 
 /** Handoff skill invocation line (seq/time each; turn is assigned by the caller). */
 function isHandoffSource(source: EventSource | null): boolean {
@@ -224,24 +240,25 @@ function turnAt(pos: number, userPositions: number[]): number {
  * longer last-window only); handoffFirst = within the first window (before
  * the second real user message; purple criterion). Non-handoff
  * skill-invocations and corrupt lines don't count. */
-function scanHandoffs(
-  text: string,
-  userPositions: number[],
-  marker: ForkMarker | null,
-): { hits: HandoffHit[]; firstPos: number | null } {
-  const hits: HandoffHit[] = []
+function scanHandoffs(text: string, marker: ForkMarker | null): { hits: RawHit[]; firstPos: number | null } {
+  const hits: RawHit[] = []
   let firstPos: number | null = null
   let at = text.indexOf(HANDOFF_MARK)
   while (at >= 0) {
     const { start, end } = lineBounds(text, at)
     const hit = isHandoffLine(text.slice(start, end), marker, start)
     if (hit !== null) {
-      hits.push({ seq: hit.seq, at: hit.at, turn: Math.max(turnAt(start, userPositions), 1) })
+      hits.push({ seq: hit.seq, at: hit.at, pos: start })
       if (firstPos === null) firstPos = start
     }
     at = text.indexOf(HANDOFF_MARK, at + HANDOFF_MARK.length)
   }
   return { hits, firstPos }
+}
+
+/** Turn attribution: 1-based; `base` = real user messages ahead of the scanned text. */
+function withTurns(hits: RawHit[], userPositions: number[], base: number): HandoffHit[] {
+  return hits.map((hit) => ({ seq: hit.seq, at: hit.at, turn: Math.max(base + turnAt(hit.pos, userPositions), 1) }))
 }
 
 /** Offset where the first conversation window ends: the second real user message (no second message = whole log). */
@@ -250,12 +267,22 @@ function firstWindowEnd(userPositions: number[]): number {
 }
 
 export function parseLog(text: string): ParsedLog | null {
+  const full = parseLogFull(text)
+  if (full === null) return null
+  const { users: _users, ...log } = full
+  return log
+}
+
+/** parseLog plus `users` = real user messages of the own conversation (the
+ *  turn base an appended chunk continues from). */
+export function parseLogFull(text: string): (ParsedLog & { users: number }) | null {
   const header = parseHeader(text)
   if (header === null) return null
   const marker = findForkMarker(text)
   const users = scanUserMessages(text, marker)
-  const handoff = scanHandoffs(text, users.positions, marker)
+  const handoff = scanHandoffs(text, marker)
   return {
+    users: users.positions.length,
     createdAt: header.createdAt,
     firstUserAt: users.firstUserAt,
     lastAt: lastActivity(text, header.createdAt),
@@ -265,7 +292,7 @@ export function parseLog(text: string): ParsedLog | null {
     cwd: header.cwd,
     handoffFirst: handoff.firstPos !== null && handoff.firstPos < firstWindowEnd(users.positions),
     handoffUsed: handoff.hits.length > 0,
-    handoffHits: handoff.hits,
+    handoffHits: withTurns(handoff.hits, users.positions, 0),
     forkMarkerSeq: marker?.seq ?? null,
   }
 }
@@ -317,4 +344,41 @@ export function signatureLog(text: string): EventSignature {
     pos = nl + 1
   }
   return sig
+}
+
+/* ---- Incremental scan (a chunk appended to an already-parsed log) ---- */
+
+/** Handoff invocation inside a chunk; its turn = base + before (the base = real
+ *  user messages of the parsed prefix). */
+export interface ChunkHit { seq: number; at: number; before: number }
+
+/** What an appended chunk contributes on its own. */
+export interface ChunkScan {
+  title: string | null
+  /** Time of the chunk's first real user message (0 = none). */
+  firstUserAt: number
+  /** Real user messages inside the chunk (added to the turn base). */
+  users: number
+  hits: ChunkHit[]
+  /** Event times of the chunk's last lines (see tailTimes). */
+  tail: number[]
+  /** Event signature of the chunk's lines (appended to the prefix signature). */
+  sig: EventSignature
+}
+
+/** Scan a chunk that starts on a line boundary after text ending with '\n'.
+ *  Null = the chunk carries an own fork marker: that marker gates which user
+ *  messages and handoff calls count, so the whole log must be re-parsed. */
+export function scanChunk(chunk: string): ChunkScan | null {
+  if (findForkMarker(chunk) !== null) return null
+  const users = scanUserMessages(chunk, null)
+  const hits = scanHandoffs(chunk, null).hits.map((hit) => ({ seq: hit.seq, at: hit.at, before: turnAt(hit.pos, users.positions) }))
+  return {
+    title: lastTitle(chunk),
+    firstUserAt: users.firstUserAt,
+    users: users.positions.length,
+    hits,
+    tail: tailTimes(chunk),
+    sig: signatureLog(chunk),
+  }
 }
