@@ -31,13 +31,13 @@ dsh plugin --profile web add @columforge/session-timeline
 
 Or enter the package name `@columforge/session-timeline` in the DSH Plugins page → Add plugin.
 
-**Alternative: market index (git source, no npm)** — in the DSH **Plugins → Discover** tab, add this index URL:
+**Alternative: market index** — in the DSH **Plugins → Discover** tab, add this index URL:
 
 ```
 https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
 
-The newest entry there is a git source pinned to a fixed commit, installed through the bundle path. Or install from the command line directly (`<commit>` = `source.commit` in `market-index.json`):
+The newest entry there is the version published to npm. The git source is a separate backup channel for command-line installs (`<commit>` = the commit the version tag points to, e.g. `v0.1.2`):
 
 ```bash
 dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
@@ -174,7 +174,8 @@ Commit-time fast gate (sub-second, only looks at git-changed files): activate th
 
 ## Distribution
 - **npm (primary channel)**: `@columforge/session-timeline` on public npm, prebuilt install (`publishConfig.access=public`). Community catalogs (e.g. awesome-dsh-plugin) build their `index.json` from npm data, so the plugin is picked up into DSH Discover once published
-- **git source (backup channel)**: `market-index.json` version entries use `source.type: git`, pinned to a fixed GitHub commit; DSH installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)
+- **Market index**: `https://columforge.github.io/dsh-session-timeline/market-index.json` (GitHub Pages, served from `market-index.json` on master); version entries are `source.type: npm`, i.e. the version published to npm
+- **git source (backup channel)**: a command-line install of `git+https://…#<commit>` pinned to a fixed GitHub commit; DSH installs that commit as a bundle (`lib/` is committed, so no build and no npm are needed)
 - **GitHub Releases**: every version ships an `npm pack` tgz (an extract-and-install local directory, also useful for offline distribution)
 - Release title/body and publishing rules: [docs/release-notes-style.md](docs/release-notes-style.md)
 ## License

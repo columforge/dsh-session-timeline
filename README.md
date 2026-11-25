@@ -32,13 +32,13 @@ dsh plugin --profile web add @columforge/session-timeline
 
 或在 DSH 插件页「添加插件」填入包名 `@columforge/session-timeline`。
 
-**备选：市场索引（git 源，不经过 npm）**——在 DSH **插件页 → 发现** 添加索引 URL：
+**备选：市场索引**——在 DSH **插件页 → 发现** 添加索引 URL：
 
 ```
 https://columforge.github.io/dsh-session-timeline/market-index.json
 ```
 
-列表中的最新条目为 git 源（钉固定 commit，走 bundle 安装通道）。也可直接命令行安装（`<commit>` 取 `market-index.json` 的 `source.commit`）：
+列表中的最新条目即已上架 npm 的版本。git 源是独立的备份通道，命令行直装（`<commit>` 取该版本 tag 指向的提交，如 `v0.1.2`）：
 
 ```bash
 dsh plugin --profile web add "git+https://github.com/columforge/dsh-session-timeline.git#<commit>"
@@ -68,11 +68,11 @@ npm run build        # 需 DSH_CHECKOUT 指向 DSH 源码 checkout（见下）
 | `v0.1.3-alpha.1` ≤ X `< v0.1.7-alpha.1` | `≥ 0.0.18` | 仅 header `parentSession` 路径（父指针自 DSH `v0.1.2-alpha.1` 起写入）；fork 种子的 `inherited:true` 标记尚未存在，0.0.32+ 的推断在此段恒不触发，行为等同 header 路径 |
 | `< v0.1.3-alpha.1` | —（任意插件版本均不可用） | ❌ 不支持：无 `session.v4.jsonl.zstd`（v4 之前的格式），该批会话不可读、不入时间线 |
 
-- **插件版本口径**：`0.0.18` = 时间线首版（原生血缘 header 路径 + handoff 判定）；`0.0.18 ~ 0.0.31` 血缘行为一致（其间为界面/几何迭代；公开发布记录 0.0.27 ~ 0.0.31）；`0.0.32` = fork 继承前缀推断版；`0.1.0` = turnOutline 集成版（详情区实时轮次刷新、任意会话「定位」跳转、助手回复 Markdown 渲染；发布渠道随 0.1.0 上架）；`0.1.1` = fork 显形修正版（fork 边无论扇出均为分支线、fork/handoff 标签互斥）+ v0.2.3-alpha.2 适配验证。
+- **插件版本口径**：`0.0.18` = 时间线首版（原生血缘 header 路径 + handoff 判定）；`0.0.18 ~ 0.0.31` 血缘行为一致（其间为界面/几何迭代；公开发布记录 0.0.27 ~ 0.0.31）；`0.0.32` = fork 继承前缀推断版；`0.1.0` = turnOutline 集成版（详情区实时轮次刷新、任意会话「定位」跳转、助手回复 Markdown 渲染；发布渠道随 0.1.0 上架）；`0.1.1` = fork 显形修正版（fork 边无论扇出均为分支线、fork/handoff 标签互斥）+ v0.2.3-alpha.2 适配验证；`0.1.2` = 加载策略版（持久索引 + 追加帧增量合并 + 骨架优先，全量构建在 worker thread——主机重启后不再同步全量解析会话日志）。
 - **升级口径**：DSH 升至 `≥ v0.2.3-alpha.2` 时，插件须同步升至 `≥ 0.1.1`；DSH 在 `≥ v0.2.2-alpha.2` 区间须 `≥ 0.0.32`（源码构建/热重载即刻生效）；其余区间插件向下兼容，旧插件无需降级。
 - 推断只读会话日志：按继承前缀 `(type,seq,time)` 签名匹配 + 日志 `createdAt` 次序消歧；匹配不到不出边、不臆造。
 - 顶层会话的创建时间等其余功能在 v4 可读区间内行为一致，不随版本分叉。
-- 开发/验证基线：DSH tag `dsh-v0.2.3-alpha.2`（`4b399c39a6`，2026-11-22）+ 插件 `0.1.1`；106 项测试、CRAP/重复度门禁与真实日志差分守卫（1961 会话）通过，raysenchip 工作区线上对账通过（f2b28302→afe7d5b4 fork 边显形为分支）。
+- 开发/验证基线：DSH tag `dsh-v0.2.3-alpha.2`（`4b399c39a6`，2026-11-22）+ 插件 `0.1.2`；131 项测试、CRAP/重复度门禁与真实日志差分守卫（1994 会话）通过，raysenchip 工作区线上对账通过（f2b28302→afe7d5b4 fork 边显形为分支）；加载策略改造后 27 条路由新旧响应逐字节相等。
 
 ## 使用指南
 
@@ -179,7 +179,8 @@ npm test         # pretest 自动 build，再跑全部单测
 
 ## 发布渠道
 - **npm（主渠道）**：`@columforge/session-timeline`（公共 npm，预构建安装；`publishConfig.access=public`）。社区目录（如 awesome-dsh-plugin）的 `index.json` 由脚本从 npm 数据生成，npm 上架后即可被收录进 DSH 发现页
-- **git 源（备份通道）**：`market-index.json` 的版本条目使用 `source.type: git`，钉在 GitHub 仓库的固定 commit；DSH 以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
+- **市场索引**：`https://columforge.github.io/dsh-session-timeline/market-index.json`（GitHub Pages，取自 master 的 `market-index.json`）；版本条目为 `source.type: npm`，即已上架 npm 的版本
+- **git 源（备份通道）**：命令行安装钉在 GitHub 仓库固定 commit 的 `git+https://…#<commit>`；DSH 以 bundle 方式安装该 commit（`lib/` 已提交，无需构建、无需 npm）
 - **GitHub Releases**：每个版本附 `npm pack` 产出的 tgz（解压即装的本地目录形态，也便于离线分发）
 - Release 标题/正文与发布流程规则见 [docs/release-notes-style.md](docs/release-notes-style.md)
 ## 许可证
