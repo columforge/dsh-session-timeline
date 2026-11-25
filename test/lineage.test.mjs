@@ -51,3 +51,20 @@ test('显形类别：度表缺节点时按 0 兜底 = handoff', () => {
   const d = lineageDegrees([], [])
   assert.equal(displayKind(e('x', 'y'), d), 'handoff')
 })
+
+test('显形类别：单后继但子为 fork（own 继承标记）= 分支', () => {
+  const d = lineageDegrees([e('p', 'c')], [])
+  const isFork = (id) => id === 'c'
+  assert.equal(displayKind(e('p', 'c'), d, isFork), 'branch')
+})
+
+test('显形类别：fork 谓词只看子端——指向非 fork 的单子边仍为 handoff', () => {
+  const d = lineageDegrees([e('p', 'c')], [])
+  const isFork = (id) => id === 'p'
+  assert.equal(displayKind(e('p', 'c'), d, isFork), 'handoff')
+})
+
+test('显形类别：谓词缺省时退化为纯扇出口径（向后兼容）', () => {
+  const d = lineageDegrees([e('p', 'c')], [])
+  assert.equal(displayKind(e('p', 'c'), d, undefined), 'handoff')
+})

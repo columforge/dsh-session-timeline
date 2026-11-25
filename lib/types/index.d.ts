@@ -81,7 +81,9 @@ export interface SessionNode {
     /** In the workspace registry's archive set (stamped at /list assembly; not part of the parse cache). */
     archived: boolean;
 }
-/** Native edge: handoff (single child, chained) / branch (multiple children). */
+/** Native edge kind: the child's lineage nature — 'branch' when the child is
+ *  a fork (own inherited end-seed marker) or the parent has multiple children;
+ *  'handoff' only for a chained single non-fork child. */
 export interface NativeEdge {
     from: string;
     to: string;

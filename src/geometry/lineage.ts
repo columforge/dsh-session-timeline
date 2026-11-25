@@ -65,14 +65,19 @@ export function lineageDegrees(
   return m
 }
 
-/** Display kind of a link: merged out-degree ≥ 2 = branch (fan-out, purple solid), else handoff (chained, blue solid).
- *  The host's edges[].kind keeps the native criterion (by native child count);
+/** Display kind of a link: merged out-degree ≥ 2 = branch (fan-out, purple solid);
+ *  an edge into a fork child is also branch — a fork is a fork regardless of
+ *  fan-out (DSH fork children carry an own inherited end-seed marker, and their
+ *  header.isSeeded does NOT mean a handoff seed); else handoff (chained, blue solid).
+ *  The host's edges[].kind keeps the native criterion (fork child or native child count);
  *  display kind is derived here — when the parent also has a manual successor,
- *  a native single-child edge displays as a branch (result of merged chain
+ *  a native single-child non-fork edge displays as a branch (result of merged chain
  *  semantics). */
 export function displayKind(
   edge: LineageEdge,
   degrees: Map<string, LineageDegree>,
+  isForkChild: (id: string) => boolean = () => false,
 ): 'handoff' | 'branch' {
+  if (isForkChild(edge.to)) return 'branch'
   return (degrees.get(edge.from)?.out ?? 0) >= 2 ? 'branch' : 'handoff'
 }

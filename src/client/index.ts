@@ -72,7 +72,7 @@ import { lineageDegrees, displayKind } from '../geometry/lineage.js'
 import { computeLanesLayout, laneNodeTop, type LanesLayout } from '../geometry/lanes.js'
 import { NS, dictionaries, zh, type Translate } from './locales.js'
 const h = React.createElement
-const { useEffect, useMemo, useRef, useState } = React
+const { useCallback, useEffect, useMemo, useRef, useState } = React
 
 const P = require('@deepseek-ai/dsh-client-ui-primitives') as {
   Button: (props: Record<string, unknown>) => unknown
@@ -787,6 +787,11 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
    * criteria, ⑂N badge, branch display detection, and the detail pane's lineage/successor narration
    * (pure function lineageDegrees). */
   const degree = useMemo(() => lineageDegrees(edges, manualLinks), [edges, manualLinks])
+  /* Fork-child predicate for displayKind: the node carries its own inherited
+   * end-seed marker → every edge into it is a fork (branch) edge, even as an
+   * only child. header.isSeeded alone does NOT decide this (fork children are
+   * seeded too; only a seed without a fork marker is a handoff context seed). */
+  const forkChild = useCallback((id: string): boolean => byId.get(id)?.forkMarkerSeq != null, [byId])
 
   /* Obstacles: all node boxes (padded 2px); cross-edge shared channel-occupancy table (crowding penalty). */
   const obstacles = useMemo<Obstacle[]>(() => nodes.map((n) => ({
@@ -895,7 +900,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     ? [
         ...edges.filter((e) => e.from === sel.id).map((e) => ({
           id: e.to,
-          branch: displayKind(e, degree) === 'branch',
+          branch: displayKind(e, degree, forkChild) === 'branch',
           manual: false,
           unlink: null as { from: string; to: string } | null,
         })),
@@ -986,10 +991,16 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
         },
       }, n.title ?? t('node.untitled')),
       h('div', { style: { display: 'flex', gap: 4, marginTop: 'auto', flexWrap: 'wrap' } },
-        /* The "handoff" tag = handoff skill invoked or opened from a handoff seed;
-         * never by "handoff" text in the first message (would mislabel sessions discussing handoff).
+        /* Lineage tags by physical nature: a fork child (own inherited marker) is
+         * tagged 'fork', never 'handoff' — DSH fork children also carry
+         * header.isSeeded, so seeded alone must not imply handoff. The handoff
+         * tag = handoff skill invoked or opened from a handoff context seed
+         * (seeded without a fork marker); never by "handoff" text in the first
+         * message (would mislabel sessions discussing handoff).
          * Awaiting/archived states keep their frame colors (purple/gold/dashed) — no duplicate word tags. */
-        (n.seeded || n.handoffUsed) ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
+        n.forkMarkerSeq != null
+          ? h(P.Tag, { tone: 'info' }, 'fork')
+          : (n.seeded || n.handoffUsed) ? h(P.Tag, { tone: 'info' }, 'handoff') : null,
         kids >= 2 ? h(P.Tag, { tone: 'info' }, '⑂' + String(kids)) : null,
         n.parent !== null && !byId.has(n.parent) ? h(P.Tag, { tone: 'quiet' }, t('node.tag.externalParent')) : null,
         isGlobal ? h(P.Tag, { tone: 'quiet' }, bucketTail(n.bucket)) : null,
@@ -1072,10 +1083,11 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
     ...spurLines(nodes, (id) => nodeTop(layout, id), layout.colOf, layout.sideOf, layout.depthOf, axisY, 's'),
     /* Native lineage polylines: display kind by merged out-degree — blue = chained handoff,
      * purple = branch/fan-out (a single-child edge also displays as branch when the parent
-     * has a manual successor). */
+     * has a manual successor, or when the child is a fork: a fork is a fork regardless
+     * of fan-out). */
     ...edges.map((e, i) => {
       if (!layout.colOf.has(e.from) || !layout.colOf.has(e.to)) return null
-      const kind = displayKind(e, degree)
+      const kind = displayKind(e, degree, forkChild)
       const color = kind === 'branch' ? BRANCH : ACCENT
       return h('path', {
         key: 'n' + String(i),
@@ -1154,7 +1166,7 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
       ...edges.map((e, i) => {
         if (!L.colOf.has(e.from) || !L.colOf.has(e.to)) return null
         if (L.laneOf.get(e.from) !== L.laneOf.get(e.to)) return null
-        const kind = displayKind(e, degree)
+        const kind = displayKind(e, degree, forkChild)
         const color = kind === 'branch' ? BRANCH : ACCENT
         return h('path', {
           key: 'n' + String(i),
@@ -1521,12 +1533,14 @@ function PanelBody(props: { sessionId?: string; openSession: (id: string) => voi
             return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } }, [inRow, outRow])
           })(),
           /* Handoff invocations: one compact header + one mono line per call. Awaiting states
-           * stay on the canvas (purple/gold frames) — no color words repeated here. */
-          sel.handoffHits.length > 0 || sel.seeded
+           * stay on the canvas (purple/gold frames) — no color words repeated here.
+           * A fork child's header.isSeeded is not a handoff seed (its 'fork' lineage is
+           * already narrated by the ← row and the edge color) — excluded here. */
+          sel.handoffHits.length > 0 || (sel.seeded && sel.forkMarkerSeq == null)
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
                 h('div', { style: { fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8 } },
                   sel.handoffHits.length > 0 ? h('span', null, t('handoff.count', { count: sel.handoffHits.length })) : null,
-                  sel.seeded ? h('span', { style: { color: DIM } }, t('handoff.seeded')) : null),
+                  sel.forkMarkerSeq != null ? null : sel.seeded ? h('span', { style: { color: DIM } }, t('handoff.seeded')) : null),
                 ...sel.handoffHits.map((hit) => h('div', {
                   key: 'handoff-hit-' + String(hit.seq) + '-' + String(hit.at),
                   style: { color: DIM, fontSize: 11.5, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' },

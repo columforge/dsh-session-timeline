@@ -93,7 +93,9 @@ export interface SessionNode {
   archived: boolean
 }
 
-/** Native edge: handoff (single child, chained) / branch (multiple children). */
+/** Native edge kind: the child's lineage nature — 'branch' when the child is
+ *  a fork (own inherited end-seed marker) or the parent has multiple children;
+ *  'handoff' only for a chained single non-fork child. */
 export interface NativeEdge {
   from: string
   to: string
@@ -426,7 +428,10 @@ export function apply(ctx: Context, config: Config): void {
     return { nodes, unreadable }
   }
 
-  /** Native edges: one child = handoff link; multiple children = branch. */
+  /** Native edges: a fork child (own inherited end-seed marker) is a branch
+   *  edge even as an only child — a fork is a fork regardless of fan-out;
+   *  multiple children always branch; a single non-fork child chains as
+   *  handoff (header parentSession lineage / pre-marker era). */
   const nativeEdges = (nodes: SessionNode[]): NativeEdge[] => {
     const byId = new Set(nodes.map((n) => n.id))
     const childCount = new Map<string, number>()
@@ -436,7 +441,8 @@ export function apply(ctx: Context, config: Config): void {
     const out: NativeEdge[] = []
     for (const n of nodes) {
       if (n.parent === null || !byId.has(n.parent)) continue
-      out.push({ from: n.parent, to: n.id, kind: (childCount.get(n.parent) ?? 0) >= 2 ? 'branch' : 'handoff' })
+      const branch = (childCount.get(n.parent) ?? 0) >= 2 || n.forkMarkerSeq !== null
+      out.push({ from: n.parent, to: n.id, kind: branch ? 'branch' : 'handoff' })
     }
     return out
   }

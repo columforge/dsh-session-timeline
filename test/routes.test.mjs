@@ -607,3 +607,62 @@ test('zstd：窗口描述符非法 → 帧完整但解码抛错 → 500 decodeFa
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+/* ---- /list 原生边类别：fork 子（own 继承标记）单子也为 branch ---- */
+
+test('/list 边类别：fork 推断父子（单子、子带 inherited end-seed）= branch', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'stl-routes-'))
+  try {
+    /* seq 从 0 起且稠密，贴近真实日志（推断签名依赖 (type,seq,time) 元组）。 */
+    const shared = [
+      { type: 'permission/preset', seq: 0, time: 1000, data: {} },
+      userMsg(1, 1100, 'q1'),
+      assistantMsg(2, 1200, [{ type: 'text', text: 'a1' }]),
+    ]
+    writeSession(home, BUCKET_A, 'session-fk1', [
+      header('session-fk1'),
+      ...shared,
+      userMsg(3, 2100, 'q2'),
+    ])
+    writeSession(home, BUCKET_A, 'session-fk2', [
+      header('session-fk2', { createdAt: 2200, isSeeded: true }),
+      ...shared,
+      { type: 'session/end-seed', seq: 3, time: 2200, data: { inherited: true } },
+      userMsg(4, 5000, 'own q'),
+    ])
+    const handler = boot(home)
+    const { code, data } = await call(handler, '/session-timeline/api/list?workspace=' + encodeURIComponent(BUCKET_A))
+    assert.equal(code, 200)
+    assert.equal(data.ok, true)
+    const child = data.sessions.find((s) => s.id === 'session-fk2')
+    assert.equal(child.parent, 'session-fk1')
+    assert.equal(child.parentSource, 'inferred')
+    assert.equal(child.forkMarkerSeq, 3)
+    /* 单子 fork 边：分支而非 handoff（fork 无论扇出都是分支）。 */
+    assert.deepEqual(data.edges, [{ from: 'session-fk1', to: 'session-fk2', kind: 'branch' }])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('/list 边类别：header 父子（无继承标记、单子）仍为 handoff', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'stl-routes-'))
+  try {
+    writeSession(home, BUCKET_A, 'session-hd1', [header('session-hd1'), userMsg(1, 1100, 'q1')])
+    writeSession(home, BUCKET_A, 'session-hd2', [
+      header('session-hd2', { createdAt: 2000, parentSession: 'session-hd1' }),
+      userMsg(1, 2100, 'q2'),
+    ])
+    const handler = boot(home)
+    const { code, data } = await call(handler, '/session-timeline/api/list?workspace=' + encodeURIComponent(BUCKET_A))
+    assert.equal(code, 200)
+    assert.equal(data.ok, true)
+    const child = data.sessions.find((s) => s.id === 'session-hd2')
+    assert.equal(child.parent, 'session-hd1')
+    assert.equal(child.parentSource, 'header')
+    assert.equal(child.forkMarkerSeq, null)
+    assert.deepEqual(data.edges, [{ from: 'session-hd1', to: 'session-hd2', kind: 'handoff' }])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
